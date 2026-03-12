@@ -622,17 +622,17 @@ with col_chart_left:
         df_hist = df_hist.sort_values('date')
         
         # Calcolo Rendimento Cumulativo (Time-Weighted Return)
-        # Questo metodo evita che i depositi/prelievi falsino la curva del rendimento
+        # Normalizzato: il primo punto della serie è sempre 0% (performance relativa all'inizio)
         cumulative_returns = []
-        last_cum = 0.0
+        last_cum = 0.0 # Decimale: 0.05 = 5%
         
         for i in range(len(df_hist)):
             curr_val = df_hist.iloc[i]['total_value']
             curr_inv = df_hist.iloc[i]['invested_capital']
             
             if i == 0:
-                # Punto iniziale: rendimento assoluto sul capitale investito
-                last_cum = ((curr_val / curr_inv) - 1) if curr_inv > 0 else 0
+                # Il primo punto rappresenta l'inizio del tracciamento: performance = 0
+                last_cum = 0.0
             else:
                 prev_val = df_hist.iloc[i-1]['total_value']
                 prev_inv = df_hist.iloc[i-1]['invested_capital']
@@ -640,48 +640,64 @@ with col_chart_left:
                 # Calcoliamo il flusso netto tra i due snapshot
                 flow = curr_inv - prev_inv
                 
-                # Rendimento del periodo i considerando il flusso di cassa all'inizio del periodo
+                # Rendimento del periodo: considera che il flusso avvenga all'inizio del periodo
                 denominator = prev_val + flow
                 if denominator > 0:
                     period_return = (curr_val / denominator) - 1
                 else:
                     period_return = 0
                 
-                # Compounding del rendimento cumulativo
+                # Compounding (composizione) del rendimento
                 last_cum = (1 + last_cum) * (1 + period_return) - 1
             
-            cumulative_returns.append(last_cum * 100.0)
+            cumulative_returns.append(round(last_cum * 100.0, 2))
             
         df_hist['return_perc'] = cumulative_returns
         
-        # Line Chart stilizzato viola con Tooltip migliorato
-        fig_hist = px.line(
-            df_hist, 
-            x='date', 
-            y='return_perc',
-            custom_data=['total_value']
+        # --- PLOTLY DUAL AXIS CHART ---
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
+        fig_hist = make_subplots(specs=[[{"secondary_y": True}]])
+
+        # 1. Area Chart per Valore Assoluto ($) - Asse Primario (Sinistra)
+        fig_hist.add_trace(
+            go.Scatter(
+                x=df_hist['date'], 
+                y=df_hist['total_value'],
+                name="Wealth ($)",
+                fill='tozeroy',
+                line=dict(color='rgba(162, 89, 255, 0.3)', width=1),
+                marker=dict(size=4),
+                hovertemplate="Valore: $%{y:,.2f}<extra></extra>"
+            ),
+            secondary_y=False,
         )
-        
-        fig_hist.update_traces(
-            line_color='#a259ff', 
-            line_width=3,
-            hovertemplate="<b>%{x|%d %b %Y}</b><br>Rendimento: %{y:.2f}%<br>Valore: $%{customdata[0]:,.2f}<extra></extra>"
+
+        # 2. Line Chart per Rendimento (%) - Asse Secondario (Destra)
+        fig_hist.add_trace(
+            go.Scatter(
+                x=df_hist['date'], 
+                y=df_hist['return_perc'],
+                name="Return (%)",
+                line=dict(color='#a259ff', width=3, shape='spline'),
+                hovertemplate="Rendimento: %{y:.2f}%<extra></extra>"
+            ),
+            secondary_y=True,
         )
-        
+
         fig_hist.update_layout(
             paper_bgcolor='rgba(0,0,0,0)', 
             plot_bgcolor='rgba(0,0,0,0)',
             margin=dict(l=0, r=0, t=10, b=0),
+            hovermode="x unified",
+            showlegend=False,
             xaxis=dict(
                 showgrid=False,
-                zeroline=False,
-                visible=True,
                 color="#8c8d92",
-                title="",
                 rangeselector=dict(
                     buttons=list([
                         dict(count=1, label="1M", step="month", stepmode="backward"),
-                        dict(count=3, label="3M", step="month", stepmode="backward"),
                         dict(count=6, label="6M", step="month", stepmode="backward"),
                         dict(count=1, label="1Y", step="year", stepmode="backward"),
                         dict(label="ALL", step="all")
@@ -692,32 +708,25 @@ with col_chart_left:
                 )
             ),
             yaxis=dict(
+                title="", # Wealth
                 showgrid=True,
                 gridcolor='#2d2e32',
                 gridwidth=1,
                 griddash='dash',
-                zeroline=False,
                 color="#8c8d92",
-                title="",
+                tickprefix="$"
+            ),
+            yaxis2=dict(
+                title="", # Return
+                showgrid=False,
+                color="#a259ff",
                 ticksuffix="%"
             ),
-            height=400,
-            hovermode="x unified"
+            height=400
         )
         
-        # Aggiungiamo esteticamente il box scuro di sfondo come nell'immagine tramite Container 
+        # Card contenitore stilizzata
         con = st.container(border=True)
-        # Lo stile border=True in streamlit aggiunge una card leggera, ma per matchare perfetto la facciamo scura con CSS
-        st.markdown("""
-        <style>
-        div[data-testid="stVerticalBlockBorderWrapper"] {
-            border: 1px solid #2d2e32;
-            border-radius: 12px;
-            background-color: #1a1b1f;
-        }
-        </style>
-        """, unsafe_allow_html=True)
-        
         with con:
             st.plotly_chart(fig_hist, use_container_width=True, config={'displayModeBar': False})
 
