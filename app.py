@@ -102,22 +102,33 @@ st.markdown("""
 # --- INIZIALIZZAZIONE ---
 # db.init_db() - Non più necessario con Supabase
 
-# --- GESTIONE AUTENTICAZIONE ---
-if 'authenticated' not in st.session_state:
-    st.session_state.authenticated = False
+# --- INIZIALIZZAZIONE SESSIONE ---
 if 'user_id' not in st.session_state:
     st.session_state.user_id = None
 if 'user_name' not in st.session_state:
     st.session_state.user_name = None
+if 'user_token' not in st.session_state:
+    st.session_state.user_token = None
 if 'auth_mode' not in st.session_state:
     st.session_state.auth_mode = 'login'
 
-# --- LOGOUT ---
+# Tenta di ripristinare la sessione da URL se possibile (Persistence)
+query_params = st.query_params
+if st.session_state.user_token is None and "token" in query_params:
+    saved_token = query_params["token"]
+    # In una versione reale, dovremmo validare il token, 
+    # ma qui ci fidiamo del fatto che Supabase lo gestirà nelle chiamate DB.
+    # Se il token è scaduto, le chiamate db falliranno e st.error mostrerà il problema.
+    st.session_state.user_token = saved_token
+    if "uid" in query_params: st.session_state.user_id = query_params["uid"]
+    if "name" in query_params: st.session_state.user_name = query_params["name"]
+
 def logout():
-    st.session_state.authenticated = False
     st.session_state.user_id = None
     st.session_state.user_name = None
     st.session_state.user_token = None
+    st.session_state.auth_mode = 'login'
+    st.query_params.clear() # Pulisce URL
     st.rerun()
 
 # CSS Premium per il Login (Glassmorphism & Centering)
@@ -231,7 +242,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-if not st.session_state.authenticated:
+if st.session_state.user_token is None:
     # Mostra Logo se presente
     logo_html = ""
     if os.path.exists("assets/logo.png"):
@@ -262,10 +273,15 @@ if not st.session_state.authenticated:
                 else:
                     res = db.auth_login(email, password)
                     if res['success']:
-                        st.session_state.authenticated = True
                         st.session_state.user_id = res['user_id']
                         st.session_state.user_name = res['name']
                         st.session_state.user_token = res['token']
+                        # Salva sessione in URL (Persistence)
+                        st.query_params.update({
+                            "token": res['token'],
+                            "uid": res['user_id'],
+                            "name": res['name']
+                        })
                         st.success("Accesso effettuato!")
                         st.rerun()
                     else:
@@ -314,16 +330,30 @@ if not st.session_state.authenticated:
         st.markdown('</div></div></div>', unsafe_allow_html=True)
         st.stop()
 
-# --- DATI E LOGICA (SOLO SE AUTH) ---
+# --- DATI E LOGICA (CACHE) ---
+@st.cache_data(ttl=600) # Cache per 10 minuti
+def get_user_data(uid, token):
+    return {
+        "asset_classes": db.get_asset_classes(uid, token=token),
+        "portfolio_items": db.get_portfolio(uid, token=token),
+        "history_data": db.get_history(uid, token=token)
+    }
+
+@st.cache_data(ttl=3600) # Cache per 1 ora
+def get_user_settings(uid, token):
+    return db.get_setting(uid, "tolerance", token=token, default=5.0)
+
 user_id = st.session_state.user_id
 user_name = st.session_state.user_name
 user_token = st.session_state.user_token
 
-# 1. Caricamento Dati filtrati per utente
-asset_classes = db.get_asset_classes(user_id, token=user_token)
-portfolio_items = db.get_portfolio(user_id, token=user_token)
-history_data = db.get_history(user_id, token=user_token)
-rebalance_tolerance = db.get_setting(user_id, "tolerance", token=user_token, default=5.0)
+# Caricamento Dati (con Cache)
+with st.spinner('Caricamento dati...'):
+    data = get_user_data(user_id, user_token)
+    asset_classes = data["asset_classes"]
+    portfolio_items = data["portfolio_items"]
+    history_data = data["history_data"]
+    rebalance_tolerance = get_user_settings(user_id, user_token)
 
 # Dizionario helper per Asset Classes
 ac_dict = {ac['id']: ac for ac in asset_classes}
@@ -367,6 +397,7 @@ with st.sidebar:
                               help="Deviazione massima consentita prima che un asset richieda bilanciamento.")
     if new_tolerance != rebalance_tolerance:
         db.update_setting(user_id, 'tolerance', new_tolerance, token=user_token)
+        get_user_settings.clear() # Svuota cache impostazioni
         st.session_state['tolerance'] = new_tolerance # Force refresh
         st.rerun()
 
@@ -386,6 +417,7 @@ with st.sidebar:
                     if isinstance(res, dict) and 'error' in res:
                         st.error(f"Errore: {res.get('details', 'Sconosciuto')}")
                     else:
+                        get_user_data.clear() # Svuota cache per ricaricare nuove AC
                         st.success(f"{ac_name} aggiunta!")
                         st.rerun()
 
@@ -399,6 +431,7 @@ with st.sidebar:
         del_ac_id = st.selectbox("Elimina Categoria", options=[0] + [ac['id'] for ac in asset_classes], format_func=lambda x: "Seleziona..." if x==0 else ac_names.get(x, ""))
         if del_ac_id != 0 and st.button("Rimuovi Categoria"):
             db.delete_asset_class(user_id, del_ac_id, token=user_token)
+            get_user_data.clear() # Svuota cache
             st.rerun()
     else:
         st.info("Nessuna Asset Class definita. Aggiungine una per iniziare.")

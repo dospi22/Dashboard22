@@ -86,7 +86,7 @@ def should_update_price(last_updated_str):
         logger.error(f"Errore parsing data cache: {e}")
         return True # In caso di errore, forza l'aggiornamento
 
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=300) # Riduce chiamate a yf per 5 minuti
 def get_current_prices(tickers):
     """
     Recupera i prezzi per una lista di tickers.
