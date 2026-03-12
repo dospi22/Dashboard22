@@ -79,46 +79,46 @@ def auth_login(email, password):
 
 # --- SETTINGS CRUD (Filtro user_id) ---
 
-def get_setting(user_id, key, default=None):
+def get_setting(user_id, key, token=None, default=None):
     try:
         url = f"{REST_URL}/settings?select=value&key=eq.{key}&user_id=eq.{user_id}"
-        res = _request(url)
+        res = _request(url, custom_auth=token)
         if res and not isinstance(res, dict) and len(res) > 0:
             return float(res[0]['value'])
     except Exception:
         pass
     return default
 
-def update_setting(user_id, key, value):
+def update_setting(user_id, key, value, token=None):
     url = f"{REST_URL}/settings"
     payload = {"user_id": user_id, "key": key, "value": str(value)}
-    _request(url, method="POST", data=payload, extra_headers={"Prefer": "resolution=merge-duplicates"})
+    _request(url, method="POST", data=payload, extra_headers={"Prefer": "resolution=merge-duplicates"}, custom_auth=token)
 
 # --- ASSET CLASSES CRUD (Filtro user_id) ---
 
-def get_asset_classes(user_id):
+def get_asset_classes(user_id, token=None):
     url = f"{REST_URL}/asset_classes?select=id,name,target_percentage&user_id=eq.{user_id}"
-    res = _request(url)
+    res = _request(url, custom_auth=token)
     return res if isinstance(res, list) else []
 
-def add_asset_class(user_id, name, target_percentage):
+def add_asset_class(user_id, name, target_percentage, token=None):
     url = f"{REST_URL}/asset_classes"
     payload = {"user_id": user_id, "name": name, "target_percentage": target_percentage}
-    _request(url, method="POST", data=payload)
+    _request(url, method="POST", data=payload, custom_auth=token)
 
-def delete_asset_class(user_id, class_id):
+def delete_asset_class(user_id, class_id, token=None):
     url_ac = f"{REST_URL}/asset_classes?id=eq.{class_id}&user_id=eq.{user_id}"
     url_p = f"{REST_URL}/portfolio?asset_class_id=eq.{class_id}&user_id=eq.{user_id}"
     # Aggiorna portfolio a NULL per quegli asset
-    _request(url_p, method="PATCH", data={"asset_class_id": None})
+    _request(url_p, method="PATCH", data={"asset_class_id": None}, custom_auth=token)
     # Elimina AC
-    _request(url_ac, method="DELETE")
+    _request(url_ac, method="DELETE", custom_auth=token)
 
 # --- PORTFOLIO CRUD (Filtro user_id) ---
 
-def get_portfolio(user_id):
+def get_portfolio(user_id, token=None):
     url = f"{REST_URL}/portfolio?select=id,ticker,name,quantity,avg_price,currency,asset_class_id,asset_classes(name)&user_id=eq.{user_id}"
-    data = _request(url)
+    data = _request(url, custom_auth=token)
     if not isinstance(data, list): data = []
     
     portfolio = []
@@ -135,7 +135,7 @@ def get_portfolio(user_id):
         })
     return portfolio
 
-def add_portfolio_item(user_id, ticker, name, asset_class_id, quantity, avg_price, currency):
+def add_portfolio_item(user_id, ticker, name, asset_class_id, quantity, avg_price, currency, token=None):
     url = f"{REST_URL}/portfolio"
     payload = {
         'user_id': user_id,
@@ -146,30 +146,30 @@ def add_portfolio_item(user_id, ticker, name, asset_class_id, quantity, avg_pric
         'avg_price': avg_price,
         'currency': currency
     }
-    res = _request(url, method="POST", data=payload)
+    res = _request(url, method="POST", data=payload, custom_auth=token)
     return res is not None and "error" not in res
 
-def update_portfolio_item(user_id, item_id, quantity, avg_price, asset_class_id):
+def update_portfolio_item(user_id, item_id, quantity, avg_price, asset_class_id, token=None):
     url = f"{REST_URL}/portfolio?id=eq.{item_id}&user_id=eq.{user_id}"
     payload = {
         'quantity': quantity,
         'avg_price': avg_price,
         'asset_class_id': asset_class_id
     }
-    _request(url, method="PATCH", data=payload)
+    _request(url, method="PATCH", data=payload, custom_auth=token)
 
-def delete_portfolio_item(user_id, item_id):
+def delete_portfolio_item(user_id, item_id, token=None):
     url = f"{REST_URL}/portfolio?id=eq.{item_id}&user_id=eq.{user_id}"
-    _request(url, method="DELETE")
+    _request(url, method="DELETE", custom_auth=token)
 
 # --- HISTORY CRUD (Filtro user_id) ---
 
-def get_history(user_id):
+def get_history(user_id, token=None):
     url = f"{REST_URL}/history?select=date,total_value,invested_capital&user_id=eq.{user_id}&order=date.asc"
-    res = _request(url)
+    res = _request(url, custom_auth=token)
     return res if isinstance(res, list) else []
 
-def add_history_snapshot(user_id, date_str, total_value, invested_capital):
+def add_history_snapshot(user_id, date_str, total_value, invested_capital, token=None):
     url = f"{REST_URL}/history"
     payload = {
         'user_id': user_id,
@@ -177,11 +177,11 @@ def add_history_snapshot(user_id, date_str, total_value, invested_capital):
         'total_value': total_value,
         'invested_capital': invested_capital
     }
-    _request(url, method="POST", data=payload, extra_headers={"Prefer": "resolution=merge-duplicates"})
+    _request(url, method="POST", data=payload, extra_headers={"Prefer": "resolution=merge-duplicates"}, custom_auth=token)
 
-def delete_history_snapshot(user_id, date_str):
+def delete_history_snapshot(user_id, date_str, token=None):
     url = f"{REST_URL}/history?date=eq.{date_str}&user_id=eq.{user_id}"
-    _request(url, method="DELETE")
+    _request(url, method="DELETE", custom_auth=token)
 
 # --- CACHE --- (La cache prezzi è globale, non serve user_id per ora)
 
