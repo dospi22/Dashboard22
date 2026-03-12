@@ -482,6 +482,7 @@ with st.sidebar:
                             token=user_token
                         )
                         if success:
+                            get_user_data.clear() # Svuota cache per ricaricare portfolio
                             st.success(f"Aggiunto: {asset_name}")
                             st.rerun()
                         else:
@@ -843,11 +844,13 @@ else:
             
             if btn_col1.button("💾 Aggiorna Posizione", use_container_width=True):
                 db.update_portfolio_item(user_id, selected_item['id'], new_qty, new_avg, new_ac['id'], token=user_token)
+                get_user_data.clear() # Svuota cache
                 st.success("Posizione aggiornata!")
                 st.rerun()
                 
             if btn_col2.button("🗑️ Elimina Definitivamente", use_container_width=True):
                 db.delete_portfolio_item(user_id, selected_item['id'], token=user_token)
+                get_user_data.clear() # Svuota cache
                 st.rerun()
             
     # --- MODULO PAC / RIBILANCIAMENTO ---
