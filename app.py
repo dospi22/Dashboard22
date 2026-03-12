@@ -100,13 +100,109 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- INIZIALIZZAZIONE ---
-# Assicurati che il DB sia inizializzato
-db.init_db()
+# db.init_db() - Non più necessario con Supabase
 
-# RECUPERO DATI GLOBALI
-tolerance = db.get_setting('tolerance', 5.0)
-asset_classes = db.get_asset_classes()
-portfolio_items = db.get_portfolio()
+# --- GESTIONE AUTENTICAZIONE ---
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'user_id' not in st.session_state:
+    st.session_state.user_id = None
+if 'user_name' not in st.session_state:
+    st.session_state.user_name = None
+if 'auth_mode' not in st.session_state:
+    st.session_state.auth_mode = 'login'
+
+def logout():
+    st.session_state.authenticated = False
+    st.session_state.user_id = None
+    st.session_state.user_name = None
+    st.rerun()
+
+# CSS per il login
+st.markdown("""
+<style>
+    .auth-container {
+        max-width: 400px;
+        margin: 100px auto;
+        padding: 30px;
+        background-color: #1a1b1f;
+        border: 1px solid #2d2e32;
+        border-radius: 12px;
+        text-align: center;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+if not st.session_state.authenticated:
+    # Sidebar Logo even in login
+    st.markdown("""
+        <style>
+            [data-testid="stSidebarNav"] { padding-top: 0rem; }
+            [data-testid="stSidebar"] .block-container { padding-top: 1rem; }
+        </style>
+    """, unsafe_allow_html=True)
+    with st.sidebar:
+        if os.path.exists("assets/logo.png"):
+            st.image("assets/logo.png", width=120)
+    
+    if st.session_state.auth_mode == 'login':
+        st.markdown('<div class="auth-container">', unsafe_allow_html=True)
+        st.subheader("🔐 Accedi a DASBOARD 22")
+        with st.form("login_form"):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Accedi", use_container_width=True)
+            if submitted:
+                res = db.auth_login(email, password)
+                if res['success']:
+                    st.session_state.authenticated = True
+                    st.session_state.user_id = res['user_id']
+                    st.session_state.user_name = res['name']
+                    st.success("Accesso effettuato!")
+                    st.rerun()
+                else:
+                    st.error(f"Errore: {res['error']}")
+        
+        if st.button("Non hai un account? Registrati"):
+            st.session_state.auth_mode = 'signup'
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.stop()
+    else:
+        st.markdown('<div class="auth-container">', unsafe_allow_html=True)
+        st.subheader("📝 Registrazione")
+        with st.form("signup_form"):
+            new_name = st.text_input("Nome Completo")
+            new_email = st.text_input("Email")
+            new_password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Registrati", use_container_width=True)
+            if submitted:
+                if len(new_password) < 6:
+                    st.error("La password deve avere almeno 6 caratteri.")
+                else:
+                    res = db.auth_signup(new_email, new_password, new_name)
+                    if res['success']:
+                        st.success("Registrazione completata! Ora puoi accedere.")
+                        st.session_state.auth_mode = 'login'
+                        st.info("⚠️ Controlla la tua email per confermare l'account (se richiesto da Supabase).")
+                    else:
+                        st.error(f"Errore: {res['error']}")
+        
+        if st.button("Hai già un account? Accedi"):
+            st.session_state.auth_mode = 'login'
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+        st.stop()
+
+# --- DATI E LOGICA (SOLO SE AUTH) ---
+user_id = st.session_state.user_id
+user_name = st.session_state.user_name
+
+# 1. Caricamento Dati filtrati per utente
+asset_classes = db.get_asset_classes(user_id)
+portfolio_items = db.get_portfolio(user_id)
+history_data = db.get_history(user_id)
+rebalance_tolerance = db.get_setting(user_id, "tolerance", 5.0)
 
 # Dizionario helper per Asset Classes
 ac_dict = {ac['id']: ac for ac in asset_classes}
@@ -115,7 +211,7 @@ ac_names = {ac['id']: ac['name'] for ac in asset_classes}
 # Elaborazione Dati Portafoglio (Fetching prezzi e metriche)
 tickers = [item['ticker'] for item in portfolio_items]
 
-# Spinner visuale solo se ci sono ticker da aggiornare (magari lento)
+# Spinner visuale solo se ci sono ticker da aggiornare
 with st.spinner('Aggiornamento prezzi live...'):
     current_prices = de.get_current_prices(tickers)
     
@@ -138,13 +234,18 @@ with st.sidebar:
     if os.path.exists("assets/logo.png"):
         st.image("assets/logo.png", width=120)
     
+    st.write(f"👤 Ciao, **{user_name}**")
+    if st.button("Esci (Logout)"):
+        logout()
+    
+    st.divider()
     st.header("⚙️ Configurazione")
     
     # 1. Tolleranza Ribilanciamento
-    new_tolerance = st.slider("Tolleranza Ribilanciamento (%)", min_value=1.0, max_value=20.0, value=tolerance, step=0.5,
+    new_tolerance = st.slider("Tolleranza Ribilanciamento (%)", min_value=1.0, max_value=20.0, value=rebalance_tolerance, step=0.5,
                               help="Deviazione massima consentita prima che un asset richieda bilanciamento.")
-    if new_tolerance != tolerance:
-        db.update_setting('tolerance', new_tolerance)
+    if new_tolerance != rebalance_tolerance:
+        db.update_setting(user_id, 'tolerance', new_tolerance)
         st.session_state['tolerance'] = new_tolerance # Force refresh
         st.rerun()
 
@@ -160,7 +261,7 @@ with st.sidebar:
             ac_target = st.number_input("Target (%)", min_value=0.0, max_value=100.0, step=1.0)
             if st.form_submit_button("Aggiungi"):
                 if ac_name:
-                    db.add_asset_class(ac_name, ac_target)
+                    db.add_asset_class(user_id, ac_name, ac_target)
                     st.success(f"{ac_name} aggiunta!")
                     st.rerun()
 
@@ -173,7 +274,7 @@ with st.sidebar:
         # Elimina Asset Class
         del_ac_id = st.selectbox("Elimina Categoria", options=[0] + [ac['id'] for ac in asset_classes], format_func=lambda x: "Seleziona..." if x==0 else ac_names.get(x, ""))
         if del_ac_id != 0 and st.button("Rimuovi Categoria"):
-            db.delete_asset_class(del_ac_id)
+            db.delete_asset_class(user_id, del_ac_id)
             st.rerun()
     else:
         st.info("Nessuna Asset Class definita. Aggiungine una per iniziare.")
@@ -214,6 +315,7 @@ with st.sidebar:
                         asset_curr = val_result['currency']
                         
                         success = db.add_portfolio_item(
+                            user_id=user_id,
                             ticker=new_ticker,
                             name=asset_name,
                             asset_class_id=selected_ac,
@@ -248,7 +350,7 @@ with st.sidebar:
     if st.button("📸 Salva Snapshot", use_container_width=True):
         if port_data['total_current_value'] > 0:
             today_str = datetime.now().strftime("%Y-%m-%d")
-            db.add_history_snapshot(today_str, port_data['total_current_value'], port_data['total_invested'])
+            db.add_history_snapshot(user_id, today_str, port_data['total_current_value'], port_data['total_invested'])
             st.success("Snapshot salvato con successo!")
         else:
             st.warning("Portafoglio vuoto. Impossibile salvare snapshot.")
@@ -261,14 +363,14 @@ with st.sidebar:
         if st.button("Salva Storico Manuale", use_container_width=True):
             if hist_val > 0:
                 date_str = hist_date.strftime("%Y-%m-%d")
-                db.add_history_snapshot(date_str, hist_val, hist_invested)
+                db.add_history_snapshot(user_id, date_str, hist_val, hist_invested)
                 st.success(f"Dato del {date_str} salvato!")
                 st.rerun()
             else:
                 st.error("Inserisci un valore valido.")
                 
     with st.expander("🗑️ Elimina Dato Storico"):
-        history_list = db.get_history()
+        history_list = history_data
         if not history_list:
             st.info("Nessun dato storico presente.")
         else:
@@ -277,7 +379,7 @@ with st.sidebar:
                 options=[h['date'] for h in history_list]
             )
             if st.button("Conferma Eliminazione", use_container_width=True):
-                db.delete_history_snapshot(hist_to_del)
+                db.delete_history_snapshot(user_id, hist_to_del)
                 st.success(f"Record del {hist_to_del} eliminato!")
                 st.rerun()
 
@@ -346,7 +448,8 @@ col_chart_left, col_chart_right = st.columns([2, 1], gap="large")
 with col_chart_left:
     st.markdown("<h3 style='color: white; font-size: 1.2rem; font-weight: 600; margin-bottom: 20px;'>Portfolio History</h3>", unsafe_allow_html=True)
     
-    history_data = db.get_history()
+    # history_data è già stato caricato sopra, ma se vogliamo rifarlo per sicurezza:
+    # (Meglio usare quello già caricato per performance)
     
     if not history_data:
         st.info("Nessun dato storico trovato. Usa il pulsante 'Salva Snapshot' nella sidebar.")
@@ -499,7 +602,7 @@ else:
         target_weight = ac_info['target_percentage']
         
         deviation = ac_current_weight - target_weight
-        needs_rebalance = abs(deviation) > tolerance
+        needs_rebalance = abs(deviation) > rebalance_tolerance
         
         if needs_rebalance:
             status = "🚨 Sbilanciato" 
@@ -581,12 +684,12 @@ else:
             btn_col1, btn_col2 = st.columns([1, 1])
             
             if btn_col1.button("💾 Aggiorna Posizione", use_container_width=True):
-                db.update_portfolio_item(selected_item['id'], new_qty, new_avg, new_ac['id'])
+                db.update_portfolio_item(user_id, selected_item['id'], new_qty, new_avg, new_ac['id'])
                 st.success("Posizione aggiornata!")
                 st.rerun()
                 
             if btn_col2.button("🗑️ Elimina Definitivamente", use_container_width=True):
-                db.delete_portfolio_item(selected_item['id'])
+                db.delete_portfolio_item(user_id, selected_item['id'])
                 st.rerun()
             
     # --- MODULO PAC / RIBILANCIAMENTO ---
@@ -597,11 +700,11 @@ else:
     
     with col_pac1:
         if rebalance_warnings:
-            st.warning("⚠️ Tolleranza Superata (\u00B1" + str(tolerance) + "%)")
+            st.warning("⚠️ Tolleranza Superata (±" + str(rebalance_tolerance) + "%)")
             for w in set(rebalance_warnings):
                 st.write(f"- {w}")
         else:
-            st.success(f"Portafoglio bilanciato (\u00B1{tolerance}%).")
+            st.success(f"Portafoglio bilanciato (±{rebalance_tolerance}%).")
             
         pac_amount = st.number_input("Nuova liquidità ($)", min_value=0.0, step=100.0)
     

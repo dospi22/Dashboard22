@@ -11,8 +11,9 @@ load_dotenv()
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# Root URL per REST API
+# URL Root per REST e Auth
 REST_URL = f"{SUPABASE_URL}/rest/v1"
+AUTH_URL = f"{SUPABASE_URL}/auth/v1"
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -21,10 +22,12 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
-def _request(url, method="GET", data=None, extra_headers=None):
+def _request(url, method="GET", data=None, extra_headers=None, custom_auth=None):
     headers = HEADERS.copy()
     if extra_headers:
         headers.update(extra_headers)
+    if custom_auth:
+        headers["Authorization"] = f"Bearer {custom_auth}"
     
     req_data = None
     if data:
@@ -35,45 +38,88 @@ def _request(url, method="GET", data=None, extra_headers=None):
         with urllib.request.urlopen(req) as response:
             res_body = response.read().decode("utf-8")
             return json.loads(res_body) if res_body else {}
+    except urllib.error.HTTPError as e:
+        error_msg = e.read().decode("utf-8")
+        try:
+            return {"error": True, "details": json.loads(error_msg)}
+        except:
+            return {"error": True, "details": error_msg}
     except Exception as e:
-        # Fallback silenzioso o log minimo
-        return None
+        return {"error": True, "details": str(e)}
 
-# --- SETTINGS CRUD ---
-def get_setting(key, default=None):
-    url = f"{REST_URL}/settings?select=value&key=eq.{key}"
-    res = _request(url)
-    if res and len(res) > 0:
-        return float(res[0]['value'])
+# --- AUTHENTICATION ---
+
+def auth_signup(email, password, name):
+    url = f"{AUTH_URL}/signup"
+    payload = {
+        "email": email,
+        "password": password,
+        "data": {"full_name": name}
+    }
+    res = _request(url, method="POST", data=payload)
+    if res and "error" not in res:
+        return {"success": True, "user": res}
+    return {"success": False, "error": res.get("details", "Errore ignoto")}
+
+def auth_login(email, password):
+    url = f"{AUTH_URL}/token?grant_type=password"
+    payload = {
+        "email": email,
+        "password": password
+    }
+    res = _request(url, method="POST", data=payload)
+    if res and "access_token" in res:
+        return {
+            "success": True, 
+            "token": res["access_token"], 
+            "user_id": res["user"]["id"],
+            "name": res["user"]["user_metadata"].get("full_name", email)
+        }
+    return {"success": False, "error": res.get("details", "Credenziali non valide")}
+
+# --- SETTINGS CRUD (Filtro user_id) ---
+
+def get_setting(user_id, key, default=None):
+    try:
+        url = f"{REST_URL}/settings?select=value&key=eq.{key}&user_id=eq.{user_id}"
+        res = _request(url)
+        if res and not isinstance(res, dict) and len(res) > 0:
+            return float(res[0]['value'])
+    except Exception:
+        pass
     return default
 
-def update_setting(key, value):
+def update_setting(user_id, key, value):
     url = f"{REST_URL}/settings"
-    payload = {"key": key, "value": str(value)}
+    payload = {"user_id": user_id, "key": key, "value": str(value)}
     _request(url, method="POST", data=payload, extra_headers={"Prefer": "resolution=merge-duplicates"})
 
-# --- ASSET CLASSES CRUD ---
-def get_asset_classes():
-    url = f"{REST_URL}/asset_classes?select=id,name,target_percentage"
-    return _request(url) or []
+# --- ASSET CLASSES CRUD (Filtro user_id) ---
 
-def add_asset_class(name, target_percentage):
+def get_asset_classes(user_id):
+    url = f"{REST_URL}/asset_classes?select=id,name,target_percentage&user_id=eq.{user_id}"
+    res = _request(url)
+    return res if isinstance(res, list) else []
+
+def add_asset_class(user_id, name, target_percentage):
     url = f"{REST_URL}/asset_classes"
-    payload = {"name": name, "target_percentage": target_percentage}
+    payload = {"user_id": user_id, "name": name, "target_percentage": target_percentage}
     _request(url, method="POST", data=payload)
 
-def delete_asset_class(class_id):
-    url_ac = f"{REST_URL}/asset_classes?id=eq.{class_id}"
-    url_p = f"{REST_URL}/portfolio?asset_class_id=eq.{class_id}"
-    # Aggiorna portfolio a NULL
+def delete_asset_class(user_id, class_id):
+    url_ac = f"{REST_URL}/asset_classes?id=eq.{class_id}&user_id=eq.{user_id}"
+    url_p = f"{REST_URL}/portfolio?asset_class_id=eq.{class_id}&user_id=eq.{user_id}"
+    # Aggiorna portfolio a NULL per quegli asset
     _request(url_p, method="PATCH", data={"asset_class_id": None})
     # Elimina AC
     _request(url_ac, method="DELETE")
 
-# --- PORTFOLIO CRUD ---
-def get_portfolio():
-    url = f"{REST_URL}/portfolio?select=id,ticker,name,quantity,avg_price,currency,asset_class_id,asset_classes(name)"
-    data = _request(url) or []
+# --- PORTFOLIO CRUD (Filtro user_id) ---
+
+def get_portfolio(user_id):
+    url = f"{REST_URL}/portfolio?select=id,ticker,name,quantity,avg_price,currency,asset_class_id,asset_classes(name)&user_id=eq.{user_id}"
+    data = _request(url)
+    if not isinstance(data, list): data = []
     
     portfolio = []
     for r in data:
@@ -89,9 +135,10 @@ def get_portfolio():
         })
     return portfolio
 
-def add_portfolio_item(ticker, name, asset_class_id, quantity, avg_price, currency):
+def add_portfolio_item(user_id, ticker, name, asset_class_id, quantity, avg_price, currency):
     url = f"{REST_URL}/portfolio"
     payload = {
+        'user_id': user_id,
         'ticker': ticker,
         'name': name,
         'asset_class_id': asset_class_id,
@@ -100,10 +147,10 @@ def add_portfolio_item(ticker, name, asset_class_id, quantity, avg_price, curren
         'currency': currency
     }
     res = _request(url, method="POST", data=payload)
-    return res is not None
+    return res is not None and "error" not in res
 
-def update_portfolio_item(item_id, quantity, avg_price, asset_class_id):
-    url = f"{REST_URL}/portfolio?id=eq.{item_id}"
+def update_portfolio_item(user_id, item_id, quantity, avg_price, asset_class_id):
+    url = f"{REST_URL}/portfolio?id=eq.{item_id}&user_id=eq.{user_id}"
     payload = {
         'quantity': quantity,
         'avg_price': avg_price,
@@ -111,34 +158,41 @@ def update_portfolio_item(item_id, quantity, avg_price, asset_class_id):
     }
     _request(url, method="PATCH", data=payload)
 
-def delete_portfolio_item(item_id):
-    url = f"{REST_URL}/portfolio?id=eq.{item_id}"
+def delete_portfolio_item(user_id, item_id):
+    url = f"{REST_URL}/portfolio?id=eq.{item_id}&user_id=eq.{user_id}"
     _request(url, method="DELETE")
 
-# --- HISTORY CRUD ---
-def get_history():
-    url = f"{REST_URL}/history?select=date,total_value,invested_capital&order=date.asc"
-    return _request(url) or []
+# --- HISTORY CRUD (Filtro user_id) ---
 
-def add_history_snapshot(date_str, total_value, invested_capital):
+def get_history(user_id):
+    url = f"{REST_URL}/history?select=date,total_value,invested_capital&user_id=eq.{user_id}&order=date.asc"
+    res = _request(url)
+    return res if isinstance(res, list) else []
+
+def add_history_snapshot(user_id, date_str, total_value, invested_capital):
     url = f"{REST_URL}/history"
     payload = {
+        'user_id': user_id,
         'date': date_str,
         'total_value': total_value,
         'invested_capital': invested_capital
     }
     _request(url, method="POST", data=payload, extra_headers={"Prefer": "resolution=merge-duplicates"})
 
-def delete_history_snapshot(date_str):
-    url = f"{REST_URL}/history?date=eq.{date_str}"
+def delete_history_snapshot(user_id, date_str):
+    url = f"{REST_URL}/history?date=eq.{date_str}&user_id=eq.{user_id}"
     _request(url, method="DELETE")
 
-# --- CACHE ---
+# --- CACHE --- (La cache prezzi è globale, non serve user_id per ora)
+
 def get_cached_price(ticker):
-    url = f"{REST_URL}/price_cache?select=price,last_updated&ticker=eq.{ticker}"
-    res = _request(url)
-    if res and len(res) > 0:
-        return {"price": res[0]['price'], "last_updated": res[0]['last_updated']}
+    try:
+        url = f"{REST_URL}/price_cache?select=price,last_updated&ticker=eq.{ticker}"
+        res = _request(url)
+        if res and isinstance(res, list) and len(res) > 0:
+            return {"price": res[0]['price'], "last_updated": res[0]['last_updated']}
+    except Exception:
+        pass
     return None
 
 def update_cached_price(ticker, price):
