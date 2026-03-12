@@ -382,9 +382,12 @@ with st.sidebar:
             ac_target = st.number_input("Target (%)", min_value=0.0, max_value=100.0, step=1.0)
             if st.form_submit_button("Aggiungi"):
                 if ac_name:
-                    db.add_asset_class(user_id, ac_name, ac_target, token=user_token)
-                    st.success(f"{ac_name} aggiunta!")
-                    st.rerun()
+                    res = db.add_asset_class(user_id, ac_name, ac_target, token=user_token)
+                    if isinstance(res, dict) and 'error' in res:
+                        st.error(f"Errore: {res.get('details', 'Sconosciuto')}")
+                    else:
+                        st.success(f"{ac_name} aggiunta!")
+                        st.rerun()
 
     # Tabella visualizzazione Asset Classes
     if asset_classes:

@@ -104,7 +104,8 @@ def get_asset_classes(user_id, token=None):
 def add_asset_class(user_id, name, target_percentage, token=None):
     url = f"{REST_URL}/asset_classes"
     payload = {"user_id": user_id, "name": name, "target_percentage": target_percentage}
-    _request(url, method="POST", data=payload, custom_auth=token)
+    res = _request(url, method="POST", data=payload, custom_auth=token)
+    return res
 
 def delete_asset_class(user_id, class_id, token=None):
     url_ac = f"{REST_URL}/asset_classes?id=eq.{class_id}&user_id=eq.{user_id}"
