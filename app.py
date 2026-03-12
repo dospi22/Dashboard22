@@ -402,21 +402,6 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    if st.button("🔄 Forza Ricarica Dati"):
-        get_user_data.clear()
-        get_user_settings.clear()
-        st.rerun()
-    
-    # Debug Info (Solo per sviluppo/risoluzione problemi)
-    with st.expander("🛠️ Diagnostica Sessione", expanded=False):
-        st.write(f"Items caricati: **{len(portfolio_items)}**")
-        st.write(f"AC caricate: **{len(asset_classes)}**")
-        st.write(f"User ID: `{user_id}`")
-        if st.button("Pulisci Cache"):
-            st.cache_data.clear()
-            st.rerun()
-
-    st.divider()
     # 2. Asset Allocation
     st.subheader("Asset Allocation Target")
     
