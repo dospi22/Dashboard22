@@ -621,23 +621,51 @@ with col_chart_left:
         df_hist['date'] = pd.to_datetime(df_hist['date'])
         df_hist = df_hist.sort_values('date')
         
-        # Calcolo rendimento percentuale
-        # Evitiamo divisione per zero: se invested_capital è 0, rendimento è 0
-        df_hist['return_perc'] = df_hist.apply(
-            lambda row: ((row['total_value'] / row['invested_capital']) - 1) * 100 if row['invested_capital'] > 0 else 0,
-            axis=1
-        )
+        # Calcolo Rendimento Cumulativo (Time-Weighted Return)
+        # Questo metodo evita che i depositi/prelievi falsino la curva del rendimento
+        cumulative_returns = []
+        last_cum = 0.0
         
-        # Line Chart stilizzato viola
+        for i in range(len(df_hist)):
+            curr_val = df_hist.iloc[i]['total_value']
+            curr_inv = df_hist.iloc[i]['invested_capital']
+            
+            if i == 0:
+                # Punto iniziale: rendimento assoluto sul capitale investito
+                last_cum = ((curr_val / curr_inv) - 1) if curr_inv > 0 else 0
+            else:
+                prev_val = df_hist.iloc[i-1]['total_value']
+                prev_inv = df_hist.iloc[i-1]['invested_capital']
+                
+                # Calcoliamo il flusso netto tra i due snapshot
+                flow = curr_inv - prev_inv
+                
+                # Rendimento del periodo i considerando il flusso di cassa all'inizio del periodo
+                denominator = prev_val + flow
+                if denominator > 0:
+                    period_return = (curr_val / denominator) - 1
+                else:
+                    period_return = 0
+                
+                # Compounding del rendimento cumulativo
+                last_cum = (1 + last_cum) * (1 + period_return) - 1
+            
+            cumulative_returns.append(last_cum * 100.0)
+            
+        df_hist['return_perc'] = cumulative_returns
+        
+        # Line Chart stilizzato viola con Tooltip migliorato
         fig_hist = px.line(
             df_hist, 
             x='date', 
-            y='return_perc'
+            y='return_perc',
+            custom_data=['total_value']
         )
         
         fig_hist.update_traces(
             line_color='#a259ff', 
-            line_width=3
+            line_width=3,
+            hovertemplate="<b>%{x|%d %b %Y}</b><br>Rendimento: %{y:.2f}%<br>Valore: $%{customdata[0]:,.2f}<extra></extra>"
         )
         
         fig_hist.update_layout(
