@@ -510,7 +510,9 @@ with st.sidebar:
         if port_data['total_current_value'] > 0:
             today_str = datetime.now().strftime("%Y-%m-%d")
             db.add_history_snapshot(user_id, today_str, port_data['total_current_value'], port_data['total_invested'], token=user_token)
+            st.cache_data.clear()
             st.success("Snapshot salvato con successo!")
+            st.rerun()
         else:
             st.warning("Portafoglio vuoto. Impossibile salvare snapshot.")
     
@@ -523,6 +525,7 @@ with st.sidebar:
             if hist_val > 0:
                 date_str = hist_date.strftime("%Y-%m-%d")
                 db.add_history_snapshot(user_id, date_str, hist_val, hist_invested, token=user_token)
+                st.cache_data.clear()
                 st.success(f"Dato del {date_str} salvato!")
                 st.rerun()
             else:
@@ -539,6 +542,7 @@ with st.sidebar:
             )
             if st.button("Conferma Eliminazione", use_container_width=True):
                 db.delete_history_snapshot(user_id, hist_to_del, token=user_token)
+                st.cache_data.clear()
                 st.success(f"Record del {hist_to_del} eliminato!")
                 st.rerun()
 
