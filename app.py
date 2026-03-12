@@ -509,7 +509,7 @@ with st.sidebar:
     if st.button("📸 Salva Snapshot", use_container_width=True):
         if port_data['total_current_value'] > 0:
             today_str = datetime.now().strftime("%Y-%m-%d")
-            db.add_history_snapshot(user_id, today_str, port_data['total_current_value'], port_data['total_invested'], token=user_token)
+            db.add_history_snapshot(user_id, today_str, port_data['total_current_value'], 0, token=user_token)
             st.cache_data.clear()
             st.success("Snapshot salvato con successo!")
             st.rerun()
@@ -519,12 +519,11 @@ with st.sidebar:
     with st.expander("✍️ Inserimento Manuale Storico"):
         hist_date = st.date_input("Data", value=datetime.now())
         hist_val = st.number_input("Valore Totale ($)", min_value=0.0, step=100.0)
-        hist_invested = st.number_input("Capitale Investito ($)", min_value=0.0, step=100.0)
         
         if st.button("Salva Storico Manuale", use_container_width=True):
             if hist_val > 0:
                 date_str = hist_date.strftime("%Y-%m-%d")
-                db.add_history_snapshot(user_id, date_str, hist_val, hist_invested, token=user_token)
+                db.add_history_snapshot(user_id, date_str, hist_val, 0, token=user_token)
                 st.cache_data.clear()
                 st.success(f"Dato del {date_str} salvato!")
                 st.rerun()
@@ -621,38 +620,13 @@ with col_chart_left:
         df_hist['date'] = pd.to_datetime(df_hist['date'])
         df_hist = df_hist.sort_values('date')
         
-        # Calcolo Rendimento Cumulativo (Time-Weighted Return)
-        # Normalizzato: il primo punto della serie è sempre 0% (performance relativa all'inizio)
-        cumulative_returns = []
-        last_cum = 0.0 # Decimale: 0.05 = 5%
-        
-        for i in range(len(df_hist)):
-            curr_val = df_hist.iloc[i]['total_value']
-            curr_inv = df_hist.iloc[i]['invested_capital']
-            
-            if i == 0:
-                # Il primo punto rappresenta l'inizio del tracciamento: performance = 0
-                last_cum = 0.0
-            else:
-                prev_val = df_hist.iloc[i-1]['total_value']
-                prev_inv = df_hist.iloc[i-1]['invested_capital']
-                
-                # Calcoliamo il flusso netto tra i due snapshot
-                flow = curr_inv - prev_inv
-                
-                # Rendimento del periodo: considera che il flusso avvenga all'inizio del periodo
-                denominator = prev_val + flow
-                if denominator > 0:
-                    period_return = (curr_val / denominator) - 1
-                else:
-                    period_return = 0
-                
-                # Compounding (composizione) del rendimento
-                last_cum = (1 + last_cum) * (1 + period_return) - 1
-            
-            cumulative_returns.append(round(last_cum * 100.0, 2))
-            
-        df_hist['return_perc'] = cumulative_returns
+        # Calcolo Rendimento Semplice (Relative Growth)
+        # Il primo punto cronologico è il 0% (baseline)
+        # La performance è calcolata come: (Valore Attuale / Valore Iniziale) - 1
+        baseline_val = df_hist.iloc[0]['total_value']
+        df_hist['return_perc'] = df_hist['total_value'].apply(
+            lambda x: ((x / baseline_val) - 1) * 100 if baseline_val > 0 else 0
+        )
         
         # --- PLOTLY DUAL AXIS CHART ---
         import plotly.graph_objects as go
