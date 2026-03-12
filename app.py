@@ -112,97 +112,218 @@ if 'user_name' not in st.session_state:
 if 'auth_mode' not in st.session_state:
     st.session_state.auth_mode = 'login'
 
+# --- LOGOUT ---
 def logout():
     st.session_state.authenticated = False
     st.session_state.user_id = None
     st.session_state.user_name = None
+    st.session_state.user_token = None
     st.rerun()
 
-# CSS per il login
+# CSS Premium per il Login (Glassmorphism & Centering)
 st.markdown("""
 <style>
-    .auth-container {
-        max-width: 400px;
-        margin: 100px auto;
-        padding: 30px;
-        background-color: #1a1b1f;
-        border: 1px solid #2d2e32;
-        border-radius: 12px;
+    /* Nascondi elementi Streamlit che disturbano il focus */
+    [data-testid="stHeader"] { visibility: hidden; }
+    [data-testid="stSidebarNav"] { display: none; }
+    
+    /* Reset padding container per centramento */
+    .main .block-container {
+        padding-top: 0;
+        padding-bottom: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        background-color: #0e1117;
+        background-image: radial-gradient(circle at 20% 30%, rgba(79, 70, 229, 0.1) 0%, transparent 50%),
+                          radial-gradient(circle at 80% 70%, rgba(124, 58, 237, 0.1) 0%, transparent 50%);
+    }
+
+    .stApp {
+        background: transparent;
+    }
+
+    .auth-wrapper {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        max-width: 420px;
+        animation: fadeIn 0.8s ease-out;
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+
+    .auth-card {
+        background: rgba(26, 27, 31, 0.6);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 28px;
+        padding: 45px;
+        width: 100%;
+        box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+    }
+
+    .auth-header {
         text-align: center;
+        margin-bottom: 30px;
+    }
+
+    .auth-header h1 {
+        font-size: 1.8rem;
+        font-weight: 700;
+        margin-bottom: 8px;
+        background: linear-gradient(90deg, #fff, #a5b4fc);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+    }
+
+    .auth-header p {
+        color: #94a3b8;
+        font-size: 0.95rem;
+    }
+
+    /* Styling Input Fields */
+    .stTextInput > div > div > input {
+        background-color: rgba(15, 23, 42, 0.5) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 12px !important;
+        color: white !important;
+        padding: 12px 16px !important;
+    }
+
+    /* Bottoni */
+    .stButton > button {
+        width: 100%;
+        border-radius: 14px !important;
+        height: 3.2em !important;
+        background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+        color: white !important;
+        font-weight: 600 !important;
+        border: none !important;
+        margin-top: 10px !important;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+    }
+
+    .stButton > button:hover {
+        transform: translateY(-2px) !important;
+        box-shadow: 0 10px 20px -5px rgba(79, 70, 229, 0.5) !important;
+        filter: brightness(1.1) !important;
+    }
+
+    .secondary-btn > button {
+        background: transparent !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        color: #94a3b8 !important;
+        margin-top: 20px !important;
+    }
+
+    .secondary-btn > button:hover {
+        background: rgba(255, 255, 255, 0.05) !important;
+        color: white !important;
     }
 </style>
 """, unsafe_allow_html=True)
 
 if not st.session_state.authenticated:
-    # Sidebar Logo even in login
-    st.markdown("""
-        <style>
-            [data-testid="stSidebarNav"] { padding-top: 0rem; }
-            [data-testid="stSidebar"] .block-container { padding-top: 1rem; }
-        </style>
-    """, unsafe_allow_html=True)
-    with st.sidebar:
-        if os.path.exists("assets/logo.png"):
-            st.image("assets/logo.png", width=120)
-    
+    # Mostra Logo se presente
+    logo_html = ""
+    if os.path.exists("assets/logo.png"):
+        logo_path = "assets/logo.png"
+        import base64
+        with open(logo_path, "rb") as f:
+            logo_b64 = base64.b64encode(f.read()).decode()
+        logo_html = f'<img src="data:image/png;base64,{logo_b64}" width="100" style="margin-bottom: 20px;">'
+
     if st.session_state.auth_mode == 'login':
-        st.markdown('<div class="auth-container">', unsafe_allow_html=True)
-        st.subheader("🔐 Accedi a DASBOARD 22")
-        with st.form("login_form"):
-            email = st.text_input("Email")
-            password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Accedi", use_container_width=True)
-            if submitted:
-                res = db.auth_login(email, password)
-                if res['success']:
-                    st.session_state.authenticated = True
-                    st.session_state.user_id = res['user_id']
-                    st.session_state.user_name = res['name']
-                    st.success("Accesso effettuato!")
-                    st.rerun()
-                else:
-                    st.error(f"Errore: {res['error']}")
+        st.markdown(f"""
+            <div class="auth-wrapper">
+                {logo_html}
+                <div class="auth-card">
+                    <div class="auth-header">
+                        <h1>Benvenuto 👋</h1>
+                        <p>Inserisci le tue credenziali per accedere</p>
+                    </div>
+        """, unsafe_allow_html=True)
         
-        if st.button("Non hai un account? Registrati"):
+        with st.form("login_form"):
+            email = st.text_input("Email", placeholder="nome@esempio.it")
+            password = st.text_input("Password", type="password", placeholder="••••••••")
+            submitted = st.form_submit_button("Accedi")
+            if submitted:
+                if not email or not password:
+                    st.error("Inserisci email e password")
+                else:
+                    res = db.auth_login(email, password)
+                    if res['success']:
+                        st.session_state.authenticated = True
+                        st.session_state.user_id = res['user_id']
+                        st.session_state.user_name = res['name']
+                        st.session_state.user_token = res['token']
+                        st.success("Accesso effettuato!")
+                        st.rerun()
+                    else:
+                        st.error(f"Errore: {res['error']}")
+        
+        st.markdown('<div class="secondary-btn">', unsafe_allow_html=True)
+        if st.button("Non hai un account? Registrati ora"):
             st.session_state.auth_mode = 'signup'
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div></div></div>', unsafe_allow_html=True)
         st.stop()
     else:
-        st.markdown('<div class="auth-container">', unsafe_allow_html=True)
-        st.subheader("📝 Registrazione")
+        st.markdown(f"""
+            <div class="auth-wrapper">
+                {logo_html}
+                <div class="auth-card">
+                    <div class="auth-header">
+                        <h1>Crea Account ✨</h1>
+                        <p>Inizia a gestire il tuo patrimonio oggi</p>
+                    </div>
+        """, unsafe_allow_html=True)
+        
         with st.form("signup_form"):
-            new_name = st.text_input("Nome Completo")
-            new_email = st.text_input("Email")
-            new_password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Registrati", use_container_width=True)
+            new_name = st.text_input("Nome Completo", placeholder="Mario Rossi")
+            new_email = st.text_input("Email", placeholder="mario@esempio.it")
+            new_password = st.text_input("Password", type="password", placeholder="Minimo 6 caratteri")
+            submitted = st.form_submit_button("Crea il mio account")
             if submitted:
                 if len(new_password) < 6:
                     st.error("La password deve avere almeno 6 caratteri.")
+                elif not new_name or not new_email:
+                    st.error("Compila tutti i campi.")
                 else:
                     res = db.auth_signup(new_email, new_password, new_name)
                     if res['success']:
                         st.success("Registrazione completata! Ora puoi accedere.")
                         st.session_state.auth_mode = 'login'
-                        st.info("⚠️ Controlla la tua email per confermare l'account (se richiesto da Supabase).")
+                        st.info("⚠️ Controlla la tua email per confermare l'account (se richiesto).")
                     else:
                         st.error(f"Errore: {res['error']}")
         
+        st.markdown('<div class="secondary-btn">', unsafe_allow_html=True)
         if st.button("Hai già un account? Accedi"):
             st.session_state.auth_mode = 'login'
             st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
+        st.markdown('</div></div></div>', unsafe_allow_html=True)
         st.stop()
 
 # --- DATI E LOGICA (SOLO SE AUTH) ---
 user_id = st.session_state.user_id
 user_name = st.session_state.user_name
+user_token = st.session_state.user_token
 
 # 1. Caricamento Dati filtrati per utente
-asset_classes = db.get_asset_classes(user_id)
-portfolio_items = db.get_portfolio(user_id)
-history_data = db.get_history(user_id)
-rebalance_tolerance = db.get_setting(user_id, "tolerance", 5.0)
+asset_classes = db.get_asset_classes(user_id, token=user_token)
+portfolio_items = db.get_portfolio(user_id, token=user_token)
+history_data = db.get_history(user_id, token=user_token)
+rebalance_tolerance = db.get_setting(user_id, "tolerance", token=user_token, default=5.0)
 
 # Dizionario helper per Asset Classes
 ac_dict = {ac['id']: ac for ac in asset_classes}
@@ -245,7 +366,7 @@ with st.sidebar:
     new_tolerance = st.slider("Tolleranza Ribilanciamento (%)", min_value=1.0, max_value=20.0, value=rebalance_tolerance, step=0.5,
                               help="Deviazione massima consentita prima che un asset richieda bilanciamento.")
     if new_tolerance != rebalance_tolerance:
-        db.update_setting(user_id, 'tolerance', new_tolerance)
+        db.update_setting(user_id, 'tolerance', new_tolerance, token=user_token)
         st.session_state['tolerance'] = new_tolerance # Force refresh
         st.rerun()
 
@@ -261,7 +382,7 @@ with st.sidebar:
             ac_target = st.number_input("Target (%)", min_value=0.0, max_value=100.0, step=1.0)
             if st.form_submit_button("Aggiungi"):
                 if ac_name:
-                    db.add_asset_class(user_id, ac_name, ac_target)
+                    db.add_asset_class(user_id, ac_name, ac_target, token=user_token)
                     st.success(f"{ac_name} aggiunta!")
                     st.rerun()
 
@@ -274,7 +395,7 @@ with st.sidebar:
         # Elimina Asset Class
         del_ac_id = st.selectbox("Elimina Categoria", options=[0] + [ac['id'] for ac in asset_classes], format_func=lambda x: "Seleziona..." if x==0 else ac_names.get(x, ""))
         if del_ac_id != 0 and st.button("Rimuovi Categoria"):
-            db.delete_asset_class(user_id, del_ac_id)
+            db.delete_asset_class(user_id, del_ac_id, token=user_token)
             st.rerun()
     else:
         st.info("Nessuna Asset Class definita. Aggiungine una per iniziare.")
@@ -321,7 +442,8 @@ with st.sidebar:
                             asset_class_id=selected_ac,
                             quantity=qty,
                             avg_price=avg_p,
-                            currency=asset_curr
+                            currency=asset_curr,
+                            token=user_token
                         )
                         if success:
                             st.success(f"Aggiunto: {asset_name}")
@@ -350,7 +472,7 @@ with st.sidebar:
     if st.button("📸 Salva Snapshot", use_container_width=True):
         if port_data['total_current_value'] > 0:
             today_str = datetime.now().strftime("%Y-%m-%d")
-            db.add_history_snapshot(user_id, today_str, port_data['total_current_value'], port_data['total_invested'])
+            db.add_history_snapshot(user_id, today_str, port_data['total_current_value'], port_data['total_invested'], token=user_token)
             st.success("Snapshot salvato con successo!")
         else:
             st.warning("Portafoglio vuoto. Impossibile salvare snapshot.")
@@ -363,7 +485,7 @@ with st.sidebar:
         if st.button("Salva Storico Manuale", use_container_width=True):
             if hist_val > 0:
                 date_str = hist_date.strftime("%Y-%m-%d")
-                db.add_history_snapshot(user_id, date_str, hist_val, hist_invested)
+                db.add_history_snapshot(user_id, date_str, hist_val, hist_invested, token=user_token)
                 st.success(f"Dato del {date_str} salvato!")
                 st.rerun()
             else:
@@ -379,7 +501,7 @@ with st.sidebar:
                 options=[h['date'] for h in history_list]
             )
             if st.button("Conferma Eliminazione", use_container_width=True):
-                db.delete_history_snapshot(user_id, hist_to_del)
+                db.delete_history_snapshot(user_id, hist_to_del, token=user_token)
                 st.success(f"Record del {hist_to_del} eliminato!")
                 st.rerun()
 
@@ -684,12 +806,12 @@ else:
             btn_col1, btn_col2 = st.columns([1, 1])
             
             if btn_col1.button("💾 Aggiorna Posizione", use_container_width=True):
-                db.update_portfolio_item(user_id, selected_item['id'], new_qty, new_avg, new_ac['id'])
+                db.update_portfolio_item(user_id, selected_item['id'], new_qty, new_avg, new_ac['id'], token=user_token)
                 st.success("Posizione aggiornata!")
                 st.rerun()
                 
             if btn_col2.button("🗑️ Elimina Definitivamente", use_container_width=True):
-                db.delete_portfolio_item(user_id, selected_item['id'])
+                db.delete_portfolio_item(user_id, selected_item['id'], token=user_token)
                 st.rerun()
             
     # --- MODULO PAC / RIBILANCIAMENTO ---
