@@ -402,7 +402,21 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+    if st.button("🔄 Forza Ricarica Dati"):
+        get_user_data.clear()
+        get_user_settings.clear()
+        st.rerun()
     
+    # Debug Info (Solo per sviluppo/risoluzione problemi)
+    with st.expander("🛠️ Diagnostica Sessione", expanded=False):
+        st.write(f"Items caricati: **{len(portfolio_items)}**")
+        st.write(f"AC caricate: **{len(asset_classes)}**")
+        st.write(f"User ID: `{user_id}`")
+        if st.button("Pulisci Cache"):
+            st.cache_data.clear()
+            st.rerun()
+
+    st.divider()
     # 2. Asset Allocation
     st.subheader("Asset Allocation Target")
     
@@ -431,7 +445,7 @@ with st.sidebar:
         del_ac_id = st.selectbox("Elimina Categoria", options=[0] + [ac['id'] for ac in asset_classes], format_func=lambda x: "Seleziona..." if x==0 else ac_names.get(x, ""))
         if del_ac_id != 0 and st.button("Rimuovi Categoria"):
             db.delete_asset_class(user_id, del_ac_id, token=user_token)
-            get_user_data.clear() # Svuota cache
+            st.cache_data.clear() # Svuota TUTTA la cache per sicurezza
             st.rerun()
     else:
         st.info("Nessuna Asset Class definita. Aggiungine una per iniziare.")
@@ -482,9 +496,10 @@ with st.sidebar:
                             token=user_token
                         )
                         if success:
-                            get_user_data.clear() # Svuota cache per ricaricare portfolio
+                            st.cache_data.clear() # Refresh totale
                             st.success(f"Aggiunto: {asset_name}")
                             st.rerun()
+
                         else:
                             st.error("Errore: Il ticker esiste già nel portafoglio.")
                     else:
@@ -799,7 +814,7 @@ else:
         "P/L (%)": "{:,.2f}%"
     }).map(color_pl, subset=['P/L (%)']).map(highlight_status, subset=['Status'])
         
-    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=min(400, (len(df_display)+1)*35 + 40))
     
     # Edit / Delete riga
     with st.expander("Modifica / Elimina Posizione"):
@@ -850,7 +865,7 @@ else:
                 
             if btn_col2.button("🗑️ Elimina Definitivamente", use_container_width=True):
                 db.delete_portfolio_item(user_id, selected_item['id'], token=user_token)
-                get_user_data.clear() # Svuota cache
+                st.cache_data.clear()
                 st.rerun()
             
     # --- MODULO PAC / RIBILANCIAMENTO ---
