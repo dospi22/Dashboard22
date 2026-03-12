@@ -1,213 +1,152 @@
-import sqlite3
+import urllib.request
+import urllib.parse
+import json
 import os
+from dotenv import load_dotenv
 from datetime import datetime
 
-DB_PATH = 'wealthflow.db'
+# Carica variabili d'ambiente
+load_dotenv()
 
-def get_connection():
-    return sqlite3.connect(DB_PATH)
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-def init_db():
-    conn = get_connection()
-    c = conn.cursor()
+# Root URL per REST API
+REST_URL = f"{SUPABASE_URL}/rest/v1"
 
-    # Tabelle delle Impostazioni
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT
-        )
-    ''')
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json",
+    "Prefer": "return=representation"
+}
 
-    # Macro-Categorie (Asset Classes)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS asset_classes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT UNIQUE,
-            target_percentage REAL
-        )
-    ''')
-
-    # Portafoglio
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS portfolio (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT UNIQUE,
-            name TEXT,
-            asset_class_id INTEGER,
-            quantity REAL,
-            avg_price REAL,
-            currency TEXT,
-            FOREIGN KEY(asset_class_id) REFERENCES asset_classes(id)
-        )
-    ''')
-
-    # Storico Valore Portafoglio
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            date TEXT UNIQUE,
-            total_value REAL,
-            invested_capital REAL
-        )
-    ''')
-
-    # Cache prezi giornalieri per limitare chiamate API
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS price_cache (
-            ticker TEXT PRIMARY KEY,
-            price REAL,
-            last_updated TEXT
-        )
-    ''')
+def _request(url, method="GET", data=None, extra_headers=None):
+    headers = HEADERS.copy()
+    if extra_headers:
+        headers.update(extra_headers)
     
-    # Inserimento impostazioni di default se non esistono
-    c.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('tolerance', '5')")
-
-    conn.commit()
-    conn.close()
+    req_data = None
+    if data:
+        req_data = json.dumps(data).encode("utf-8")
+    
+    req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req) as response:
+            res_body = response.read().decode("utf-8")
+            return json.loads(res_body) if res_body else {}
+    except Exception as e:
+        # Fallback silenzioso o log minimo
+        return None
 
 # --- SETTINGS CRUD ---
 def get_setting(key, default=None):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT value FROM settings WHERE key=?", (key,))
-    row = c.fetchone()
-    conn.close()
-    return float(row[0]) if row else default
+    url = f"{REST_URL}/settings?select=value&key=eq.{key}"
+    res = _request(url)
+    if res and len(res) > 0:
+        return float(res[0]['value'])
+    return default
 
 def update_setting(key, value):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, str(value)))
-    conn.commit()
-    conn.close()
+    url = f"{REST_URL}/settings"
+    payload = {"key": key, "value": str(value)}
+    _request(url, method="POST", data=payload, extra_headers={"Prefer": "resolution=merge-duplicates"})
 
 # --- ASSET CLASSES CRUD ---
 def get_asset_classes():
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT id, name, target_percentage FROM asset_classes")
-    rows = c.fetchall()
-    conn.close()
-    return [{"id": r[0], "name": r[1], "target_percentage": r[2]} for r in rows]
+    url = f"{REST_URL}/asset_classes?select=id,name,target_percentage"
+    return _request(url) or []
 
 def add_asset_class(name, target_percentage):
-    conn = get_connection()
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO asset_classes (name, target_percentage) VALUES (?, ?)", (name, target_percentage))
-        conn.commit()
-    except sqlite3.IntegrityError:
-        pass # Ignora i duplicati
-    finally:
-        conn.close()
+    url = f"{REST_URL}/asset_classes"
+    payload = {"name": name, "target_percentage": target_percentage}
+    _request(url, method="POST", data=payload)
 
 def delete_asset_class(class_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM asset_classes WHERE id=?", (class_id,))
-    # Resetta la classe per gli asset che la usavano
-    c.execute("UPDATE portfolio SET asset_class_id=NULL WHERE asset_class_id=?", (class_id,))
-    conn.commit()
-    conn.close()
-
+    url_ac = f"{REST_URL}/asset_classes?id=eq.{class_id}"
+    url_p = f"{REST_URL}/portfolio?asset_class_id=eq.{class_id}"
+    # Aggiorna portfolio a NULL
+    _request(url_p, method="PATCH", data={"asset_class_id": None})
+    # Elimina AC
+    _request(url_ac, method="DELETE")
 
 # --- PORTFOLIO CRUD ---
 def get_portfolio():
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute('''
-        SELECT p.id, p.ticker, p.name, p.quantity, p.avg_price, p.currency, c.name, p.asset_class_id
-        FROM portfolio p
-        LEFT JOIN asset_classes c ON p.asset_class_id = c.id
-    ''')
-    rows = c.fetchall()
-    conn.close()
-    return [{"id": r[0], "ticker": r[1], "name": r[2], "quantity": r[3], "avg_price": r[4], 
-             "currency": r[5], "asset_class": r[6], "asset_class_id": r[7]} for r in rows]
+    url = f"{REST_URL}/portfolio?select=id,ticker,name,quantity,avg_price,currency,asset_class_id,asset_classes(name)"
+    data = _request(url) or []
+    
+    portfolio = []
+    for r in data:
+        portfolio.append({
+            "id": r['id'],
+            "ticker": r['ticker'],
+            "name": r['name'],
+            "quantity": r['quantity'],
+            "avg_price": r['avg_price'],
+            "currency": r['currency'],
+            "asset_class": r['asset_classes']['name'] if r.get('asset_classes') else None,
+            "asset_class_id": r['asset_class_id']
+        })
+    return portfolio
 
 def add_portfolio_item(ticker, name, asset_class_id, quantity, avg_price, currency):
-    conn = get_connection()
-    c = conn.cursor()
-    try:
-        c.execute('''
-            INSERT INTO portfolio (ticker, name, asset_class_id, quantity, avg_price, currency)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (ticker, name, asset_class_id, quantity, avg_price, currency))
-        conn.commit()
-        return True
-    except sqlite3.IntegrityError:
-        return False # Ticker già esistente
-    finally:
-        conn.close()
+    url = f"{REST_URL}/portfolio"
+    payload = {
+        'ticker': ticker,
+        'name': name,
+        'asset_class_id': asset_class_id,
+        'quantity': quantity,
+        'avg_price': avg_price,
+        'currency': currency
+    }
+    res = _request(url, method="POST", data=payload)
+    return res is not None
 
 def update_portfolio_item(item_id, quantity, avg_price, asset_class_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute('''
-        UPDATE portfolio 
-        SET quantity=?, avg_price=?, asset_class_id=?
-        WHERE id=?
-    ''', (quantity, avg_price, asset_class_id, item_id))
-    conn.commit()
-    conn.close()
+    url = f"{REST_URL}/portfolio?id=eq.{item_id}"
+    payload = {
+        'quantity': quantity,
+        'avg_price': avg_price,
+        'asset_class_id': asset_class_id
+    }
+    _request(url, method="PATCH", data=payload)
 
 def delete_portfolio_item(item_id):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM portfolio WHERE id=?", (item_id,))
-    conn.commit()
-    conn.close()
+    url = f"{REST_URL}/portfolio?id=eq.{item_id}"
+    _request(url, method="DELETE")
 
 # --- HISTORY CRUD ---
 def get_history():
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT date, total_value, invested_capital FROM history ORDER BY date ASC")
-    rows = c.fetchall()
-    conn.close()
-    return [{"date": r[0], "total_value": r[1], "invested_capital": r[2]} for r in rows]
+    url = f"{REST_URL}/history?select=date,total_value,invested_capital&order=date.asc"
+    return _request(url) or []
 
 def add_history_snapshot(date_str, total_value, invested_capital):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO history (date, total_value, invested_capital)
-        VALUES (?, ?, ?)
-    ''', (date_str, total_value, invested_capital))
-    conn.commit()
-    conn.close()
+    url = f"{REST_URL}/history"
+    payload = {
+        'date': date_str,
+        'total_value': total_value,
+        'invested_capital': invested_capital
+    }
+    _request(url, method="POST", data=payload, extra_headers={"Prefer": "resolution=merge-duplicates"})
 
 def delete_history_snapshot(date_str):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM history WHERE date=?", (date_str,))
-    conn.commit()
-    conn.close()
+    url = f"{REST_URL}/history?date=eq.{date_str}"
+    _request(url, method="DELETE")
 
 # --- CACHE ---
 def get_cached_price(ticker):
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute("SELECT price, last_updated FROM price_cache WHERE ticker=?", (ticker,))
-    row = c.fetchone()
-    conn.close()
-    if row:
-        return {"price": row[0], "last_updated": row[1]}
+    url = f"{REST_URL}/price_cache?select=price,last_updated&ticker=eq.{ticker}"
+    res = _request(url)
+    if res and len(res) > 0:
+        return {"price": res[0]['price'], "last_updated": res[0]['last_updated']}
     return None
 
 def update_cached_price(ticker, price):
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    conn = get_connection()
-    c = conn.cursor()
-    c.execute('''
-        INSERT OR REPLACE INTO price_cache (ticker, price, last_updated)
-        VALUES (?, ?, ?)
-    ''', (ticker, price, now_str))
-    conn.commit()
-    conn.close()
-
-# Inizializza il DB all'importazione (oppure lo chiamiamo esplicitamente da app.py)
-if not os.path.exists(DB_PATH):
-    init_db()
+    url = f"{REST_URL}/price_cache"
+    payload = {
+        'ticker': ticker,
+        'price': price,
+        'last_updated': now_str
+    }
+    _request(url, method="POST", data=payload, extra_headers={"Prefer": "resolution=merge-duplicates"})
