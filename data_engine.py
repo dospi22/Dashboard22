@@ -86,12 +86,10 @@ def should_update_price(last_updated_str):
         logger.error(f"Errore parsing data cache: {e}")
         return True # In caso di errore, forza l'aggiornamento
 
-@st.cache_data(ttl=300) # Riduce chiamate a yf per 5 minuti
 def get_current_prices(tickers, force_update=False):
     """
     Recupera i prezzi per una lista di tickers.
-    Usa la logica di caching per limitare le chiamate a yfinance.
-    Restituisce un dizionario {ticker: price}
+    Restituisce un dizionario {ticker: {'price': p, 'last_update': t}}
     """
     if not tickers:
         return {}
@@ -99,53 +97,43 @@ def get_current_prices(tickers, force_update=False):
     results = {}
     tickers_to_fetch = []
     
-    # 1. Controlla la cache per ogni ticker
+    # 1. Controlla la cache (SQL) per ogni ticker
     for ticker in tickers:
         cached_data = get_cached_price(ticker)
         if cached_data and not force_update:
             if should_update_price(cached_data['last_updated']):
                 tickers_to_fetch.append(ticker)
             else:
-                results[ticker] = cached_data['price']
-                logger.debug(f"Prezzo da cache per {ticker}: {cached_data['price']}")
+                results[ticker] = {
+                    'price': cached_data['price'],
+                    'last_update': cached_data['last_updated']
+                }
         else:
             tickers_to_fetch.append(ticker)
             
-    # 2. Se abbiamo ticker da aggiornare, scaricali con yfinance (in bulk se possibile)
+    # 2. Se abbiamo ticker da scaricare
     if tickers_to_fetch:
-        logger.info(f"Fetching dati da yfinance per: {tickers_to_fetch}")
         try:
-            # yf.download è più efficiente per bulk
-            # Evita l'output testuale disabilitando il progress bar
             data = yf.download(tickers_to_fetch, period="1d", group_by="ticker", threads=True, progress=False)
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
             for ticker in tickers_to_fetch:
                 try:
-                    # Estrazione prezzo (gestione struttura diversa se 1 o + ticker)
                     if len(tickers_to_fetch) == 1:
-                        price = data['Close'].iloc[-1]
+                        price = float(data['Close'].iloc[-1])
                     else:
-                        price = data[ticker]['Close'].iloc[-1]
+                        price = float(data[ticker]['Close'].iloc[-1])
                         
-                    # Conversione esplicita a float nativo (evita tipi pandas The float64)
-                    price = float(price)
-                    results[ticker] = price
-                    
-                    # Salva in cache
+                    results[ticker] = {'price': price, 'last_update': now_str}
                     update_cached_price(ticker, price)
-                    
                 except Exception as e:
-                    logger.warning(f"Impossibile estrarre o salvare prezzo per {ticker}: {e}")
-                    # Se fallisce (es. delisting o errore rete), prova a vedere se c'è almeno in cache
-                    # Anche se scaduto, meglio un prezzo vecchio che nessun prezzo in questo caso
                     cached_data = get_cached_price(ticker)
                     if cached_data:
-                        results[ticker] = cached_data['price']
+                        results[ticker] = {'price': cached_data['price'], 'last_update': cached_data['last_updated']}
                     else:
-                        results[ticker] = 0.0 # Fallback estremo
-                        
+                        results[ticker] = {'price': 0.0, 'last_update': 'N/A'}
         except Exception as e:
-            logger.error(f"Errore API bulk download yfinance: {e}")
+            logger.error(f"Errore API bulk download: {e}")
             
     return results
 
@@ -163,7 +151,9 @@ def calculate_portfolio_metrics(portfolio_items, current_prices):
         quantity = item['quantity']
         avg_price = item['avg_price']
         
-        current_price = current_prices.get(ticker, 0.0)
+        # Modifica per supportare dizionario di risultati {price, last_update}
+        price_info = current_prices.get(ticker, {'price': 0.0, 'last_update': 'N/A'})
+        current_price = price_info['price']
         
         # Calcoli riga
         invested = quantity * avg_price

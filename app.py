@@ -551,11 +551,19 @@ with st.sidebar:
 
 # --- RENDERING DASHBOARD (HTML CUSTOM KPI) ---
 st.markdown("<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;'><div></div>", unsafe_allow_html=True)
-if st.button("🔄 Aggiorna Prezzi di Mercato", use_container_width=False):
+col_head1, col_head2 = st.columns([1, 1])
+
+if col_head1.button("🔄 Aggiorna Prezzi di Mercato", use_container_width=False):
     st.session_state.force_price_update = True
     st.cache_data.clear()
-    st.success("Richiesta aggiornamento inviata...")
     st.rerun()
+
+# Mostra orario ultimo aggiornamento se disponibile
+if current_prices:
+    # Prendi il primo timestamp disponibile (assumiamo aggiornamento bulk)
+    sample_item = next(iter(current_prices.values()), {})
+    sample_time = sample_item.get('last_update', 'N/A')
+    col_head2.markdown(f"<p style='color: #8c8d92; font-size: 0.85rem; margin-top: 10px; text-align: right;'>Ultimo Aggiornamento: <b>{sample_time}</b></p>", unsafe_allow_html=True)
 
 # Creiamo una variabile stringa helper per la visibilità per non far impazzire le f-string con le graffe CSS
 visibility_style = "hidden" if best_pl == 0 else "visible"
@@ -634,11 +642,11 @@ with col_chart_left:
         df_hist['total_value'] = df_hist['total_value'].astype(float)
         
         # Troviamo il primo punto "significativo" per evitare il bug 100k%
-        # Se il valore è < 50$, probabilmente è un test o polvere residua
-        df_significant = df_hist[df_hist['total_value'] > 50.0]
+        # Saliamo a 100$ per essere più sicuri se l'utente ha conti piccoli di prova
+        df_significant = df_hist[df_hist['total_value'] > 100.0]
         
         if df_significant.empty:
-            # Se nessuno è > 50, prendiamo quello che c'è > 0
+            # Se nessuno è > 100, prendiamo quello che c'è > 0.1
             df_significant = df_hist[df_hist['total_value'] > 0.1]
             
         if df_significant.empty:
@@ -882,9 +890,9 @@ else:
             btn_col1, btn_col2 = st.columns([1, 1])
             
             if btn_col1.button("💾 Aggiorna Posizione", use_container_width=True):
-                db.update_portfolio_item(user_id, selected_item['id'], new_qty, new_avg, new_ac['id'], token=user_token)
-                st.cache_data.clear() # Svuota TUTTA la cache per sicurezza
-                st.success("Posizione aggiornata!")
+                res = db.update_portfolio_item(user_id, selected_item['id'], new_qty, new_avg, new_ac['id'], token=user_token)
+                st.cache_data.clear() # Svuota TUTTA la cache
+                st.success("Modifica inviata! Ricaricamento in corso...")
                 st.rerun()
                 
             if btn_col2.button("🗑️ Elimina Definitivamente", use_container_width=True):
