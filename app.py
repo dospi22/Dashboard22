@@ -505,15 +505,6 @@ if total_positions > 0:
 # Snapshot logica spostata nella sidebar per UI pulita
 with st.sidebar:
     st.divider()
-    
-    # Pulsante Aggiornamento Prezzi di Mercato
-    st.write("📡 Prezzi di Mercato:")
-    if st.button("🔄 Aggiorna Prezzi", use_container_width=True, help="Forza il recupero dei prezzi aggiornati da Yahoo Finance"):
-        st.cache_data.clear()
-        st.success("Prezzi aggiornati!")
-        st.rerun()
-    
-    st.divider()
     st.write("Cattura Storico Odierno:")
     if st.button("📸 Salva Snapshot", use_container_width=True):
         if port_data['total_current_value'] > 0:
@@ -555,6 +546,11 @@ with st.sidebar:
                 st.rerun()
 
 # --- RENDERING DASHBOARD (HTML CUSTOM KPI) ---
+st.markdown("<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;'><div></div>", unsafe_allow_html=True)
+if st.button("🔄 Aggiorna Prezzi di Mercato", use_container_width=False):
+    st.cache_data.clear()
+    st.success("Cache pulita! Prezzi aggiornati.")
+    st.rerun()
 
 # Creiamo una variabile stringa helper per la visibilità per non far impazzire le f-string con le graffe CSS
 visibility_style = "hidden" if best_pl == 0 else "visible"
@@ -629,46 +625,49 @@ with col_chart_left:
         df_hist['date'] = pd.to_datetime(df_hist['date'])
         df_hist = df_hist.sort_values('date')
         
-        # Calcolo Rendimento Semplice (Relative Growth)
-        # Il primo punto cronologico è il 0% (baseline)
-        # Convertiamo esplicitamente a float per evitare problemi con tipi stringa da Supabase
+        # FIX: Filtriamo record "sporchi" con valore zero o quasi zero che sballano le percentuali
         df_hist['total_value'] = df_hist['total_value'].astype(float)
-        baseline_val = float(df_hist.iloc[0]['total_value'])
-        df_hist['return_perc'] = df_hist['total_value'].apply(
-            lambda x: round(((float(x) / baseline_val) - 1) * 100, 2) if baseline_val > 0 else 0
-        )
-        
-        # --- PLOTLY DUAL AXIS CHART ---
-        import plotly.graph_objects as go
-        from plotly.subplots import make_subplots
+        df_hist = df_hist[df_hist['total_value'] > 1.0]
 
-        fig_hist = make_subplots(specs=[[{"secondary_y": True}]])
+        if df_hist.empty:
+            st.warning("Dati storici insufficienti per il grafico (valori troppo bassi).")
+        else:
+            # Calcolo Rendimento Semplice (Relative Growth)
+            baseline_val = float(df_hist.iloc[0]['total_value'])
+            df_hist['return_perc'] = df_hist['total_value'].apply(
+                lambda x: round(((float(x) / baseline_val) - 1) * 100, 2)
+            )
+            
+            # --- PLOTLY DUAL AXIS CHART ---
+            import plotly.graph_objects as go
+            from plotly.subplots import make_subplots
 
-        # 1. Area Chart per Valore Assoluto ($) - Asse Primario (Sinistra)
-        fig_hist.add_trace(
-            go.Scatter(
-                x=df_hist['date'], 
-                y=df_hist['total_value'],
-                name="Wealth ($)",
-                fill='tozeroy',
-                line=dict(color='rgba(162, 89, 255, 0.3)', width=1),
-                marker=dict(size=4),
-                hovertemplate="Valore: $%{y:,.2f}<extra></extra>"
-            ),
-            secondary_y=False,
-        )
+            fig_hist = make_subplots(specs=[[{"secondary_y": True}]])
 
-        # 2. Line Chart per Rendimento (%) - Asse Secondario (Destra)
-        fig_hist.add_trace(
-            go.Scatter(
-                x=df_hist['date'], 
-                y=df_hist['return_perc'],
-                name="Return (%)",
-                line=dict(color='#a259ff', width=3, shape='spline'),
-                hovertemplate="Rendimento: %{y:.2f}%<extra></extra>"
-            ),
-            secondary_y=True,
-        )
+            # 1. Area Chart per Valore Assoluto ($)
+            fig_hist.add_trace(
+                go.Scatter(
+                    x=df_hist['date'], 
+                    y=df_hist['total_value'],
+                    name="Valore ($)",
+                    fill='tozeroy',
+                    line=dict(color='rgba(162, 89, 255, 0.3)', width=1),
+                    hovertemplate="Valore: $%{y:,.2f}<extra></extra>"
+                ),
+                secondary_y=False,
+            )
+
+            # 2. Line Chart per Rendimento (%)
+            fig_hist.add_trace(
+                go.Scatter(
+                    x=df_hist['date'], 
+                    y=df_hist['return_perc'],
+                    name="Rendimento (%)",
+                    line=dict(color='#a259ff', width=3, shape='spline'),
+                    hovertemplate="Rendimento: %{y:.2f}%<extra></extra>"
+                ),
+                secondary_y=True,
+            )
 
         fig_hist.update_layout(
             paper_bgcolor='rgba(0,0,0,0)', 
