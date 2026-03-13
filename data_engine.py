@@ -87,7 +87,7 @@ def should_update_price(last_updated_str):
         return True # In caso di errore, forza l'aggiornamento
 
 @st.cache_data(ttl=300) # Riduce chiamate a yf per 5 minuti
-def get_current_prices(tickers):
+def get_current_prices(tickers, force_update=False):
     """
     Recupera i prezzi per una lista di tickers.
     Usa la logica di caching per limitare le chiamate a yfinance.
@@ -102,7 +102,7 @@ def get_current_prices(tickers):
     # 1. Controlla la cache per ogni ticker
     for ticker in tickers:
         cached_data = get_cached_price(ticker)
-        if cached_data:
+        if cached_data and not force_update:
             if should_update_price(cached_data['last_updated']):
                 tickers_to_fetch.append(ticker)
             else:

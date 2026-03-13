@@ -111,6 +111,8 @@ if 'user_token' not in st.session_state:
     st.session_state.user_token = None
 if 'auth_mode' not in st.session_state:
     st.session_state.auth_mode = 'login'
+if 'force_price_update' not in st.session_state:
+    st.session_state.force_price_update = False
 
 # Tenta di ripristinare la sessione da URL se possibile (Persistence)
 query_params = st.query_params
@@ -364,7 +366,9 @@ tickers = [item['ticker'] for item in portfolio_items]
 
 # Spinner visuale solo se ci sono ticker da aggiornare
 with st.spinner('Aggiornamento prezzi live...'):
-    current_prices = de.get_current_prices(tickers)
+    current_prices = de.get_current_prices(tickers, force_update=st.session_state.force_price_update)
+    # Resettiamo il flag dopo l'uso
+    st.session_state.force_price_update = False
     
 port_data = de.calculate_portfolio_metrics(portfolio_items, current_prices)
 
@@ -548,8 +552,9 @@ with st.sidebar:
 # --- RENDERING DASHBOARD (HTML CUSTOM KPI) ---
 st.markdown("<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;'><div></div>", unsafe_allow_html=True)
 if st.button("🔄 Aggiorna Prezzi di Mercato", use_container_width=False):
+    st.session_state.force_price_update = True
     st.cache_data.clear()
-    st.success("Cache pulita! Prezzi aggiornati.")
+    st.success("Richiesta aggiornamento inviata...")
     st.rerun()
 
 # Creiamo una variabile stringa helper per la visibilità per non far impazzire le f-string con le graffe CSS
@@ -625,17 +630,27 @@ with col_chart_left:
         df_hist['date'] = pd.to_datetime(df_hist['date'])
         df_hist = df_hist.sort_values('date')
         
-        # FIX: Filtriamo record "sporchi" con valore zero o quasi zero che sballano le percentuali
+        # FIX: Filtriamo record "sporchi" che sballano le percentuali (dust values)
         df_hist['total_value'] = df_hist['total_value'].astype(float)
-        df_hist = df_hist[df_hist['total_value'] > 1.0]
-
-        if df_hist.empty:
-            st.warning("Dati storici insufficienti per il grafico (valori troppo bassi).")
+        
+        # Troviamo il primo punto "significativo" per evitare il bug 100k%
+        # Se il valore è < 50$, probabilmente è un test o polvere residua
+        df_significant = df_hist[df_hist['total_value'] > 50.0]
+        
+        if df_significant.empty:
+            # Se nessuno è > 50, prendiamo quello che c'è > 0
+            df_significant = df_hist[df_hist['total_value'] > 0.1]
+            
+        if df_significant.empty:
+            st.warning("Dati storici insufficienti per il grafico.")
         else:
+            # Usiamo solo i dati a partire dal primo punto significativo
+            df_plot = df_hist[df_hist['date'] >= df_significant.iloc[0]['date']].copy()
+            
             # Calcolo Rendimento Semplice (Relative Growth)
-            baseline_val = float(df_hist.iloc[0]['total_value'])
-            df_hist['return_perc'] = df_hist['total_value'].apply(
-                lambda x: round(((float(x) / baseline_val) - 1) * 100, 2)
+            baseline_val = float(df_plot.iloc[0]['total_value'])
+            df_plot['return_perc'] = df_plot['total_value'].apply(
+                lambda x: round(((float(x) / baseline_val) - 1) * 100, 2) if baseline_val > 0 else 0
             )
             
             # --- PLOTLY DUAL AXIS CHART ---
@@ -647,8 +662,8 @@ with col_chart_left:
             # 1. Area Chart per Valore Assoluto ($)
             fig_hist.add_trace(
                 go.Scatter(
-                    x=df_hist['date'], 
-                    y=df_hist['total_value'],
+                    x=df_plot['date'], 
+                    y=df_plot['total_value'],
                     name="Valore ($)",
                     fill='tozeroy',
                     line=dict(color='rgba(162, 89, 255, 0.3)', width=1),
@@ -660,8 +675,8 @@ with col_chart_left:
             # 2. Line Chart per Rendimento (%)
             fig_hist.add_trace(
                 go.Scatter(
-                    x=df_hist['date'], 
-                    y=df_hist['return_perc'],
+                    x=df_plot['date'], 
+                    y=df_plot['return_perc'],
                     name="Rendimento (%)",
                     line=dict(color='#a259ff', width=3, shape='spline'),
                     hovertemplate="Rendimento: %{y:.2f}%<extra></extra>"
@@ -868,7 +883,7 @@ else:
             
             if btn_col1.button("💾 Aggiorna Posizione", use_container_width=True):
                 db.update_portfolio_item(user_id, selected_item['id'], new_qty, new_avg, new_ac['id'], token=user_token)
-                get_user_data.clear() # Svuota cache
+                st.cache_data.clear() # Svuota TUTTA la cache per sicurezza
                 st.success("Posizione aggiornata!")
                 st.rerun()
                 
