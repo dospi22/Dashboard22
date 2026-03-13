@@ -505,6 +505,15 @@ if total_positions > 0:
 # Snapshot logica spostata nella sidebar per UI pulita
 with st.sidebar:
     st.divider()
+    
+    # Pulsante Aggiornamento Prezzi di Mercato
+    st.write("📡 Prezzi di Mercato:")
+    if st.button("🔄 Aggiorna Prezzi", use_container_width=True, help="Forza il recupero dei prezzi aggiornati da Yahoo Finance"):
+        st.cache_data.clear()
+        st.success("Prezzi aggiornati!")
+        st.rerun()
+    
+    st.divider()
     st.write("Cattura Storico Odierno:")
     if st.button("📸 Salva Snapshot", use_container_width=True):
         if port_data['total_current_value'] > 0:
@@ -622,10 +631,11 @@ with col_chart_left:
         
         # Calcolo Rendimento Semplice (Relative Growth)
         # Il primo punto cronologico è il 0% (baseline)
-        # La performance è calcolata come: (Valore Attuale / Valore Iniziale) - 1
-        baseline_val = df_hist.iloc[0]['total_value']
+        # Convertiamo esplicitamente a float per evitare problemi con tipi stringa da Supabase
+        df_hist['total_value'] = df_hist['total_value'].astype(float)
+        baseline_val = float(df_hist.iloc[0]['total_value'])
         df_hist['return_perc'] = df_hist['total_value'].apply(
-            lambda x: ((x / baseline_val) - 1) * 100 if baseline_val > 0 else 0
+            lambda x: round(((float(x) / baseline_val) - 1) * 100, 2) if baseline_val > 0 else 0
         )
         
         # --- PLOTLY DUAL AXIS CHART ---
