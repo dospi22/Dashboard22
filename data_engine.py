@@ -1,3 +1,4 @@
+# Version 2.1.0 - Combined fixes and DNA
 import yfinance as yf
 from datetime import datetime, time
 import pytz

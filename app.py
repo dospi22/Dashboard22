@@ -9,6 +9,7 @@ import importlib
 import database as db
 importlib.reload(db)
 import data_engine as de
+importlib.reload(de)
 
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(
