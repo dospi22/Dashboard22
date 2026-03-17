@@ -292,24 +292,31 @@ def get_portfolio_dna(port_data, asset_classes):
         name = ac_dict.get(item['asset_class_id'], "")
         val = item['total_value']
         
-        if any(k in name for k in ['azion', 'equity', 'stock', 'share', 'etf']):
-            # Distinguiamo crypto se possibile
-            if 'crypto' in name or 'bitcoin' in name or 'eth' in name:
-                crypto += val
-            else:
-                equities += val
-        elif any(k in name for k in ['obblig', 'bond', 'fixed', 'titoli di stato']):
-            fixed_income += val
-        elif any(k in name for k in ['liquid', 'cash', 'conto', 'fondo']):
+        # Priority 1: Cash/Liquidity
+        if any(k in name for k in ['liquid', 'cash', 'conto', 'fondo']):
             cash += val
-        elif any(k in name for k in ['oro', 'gold', 'commodity', 'reit', 'immobiliare']):
+        # Priority 2: Fixed Income (Check before Equity to catch Bond ETFs)
+        elif any(k in name for k in ['obblig', 'bond', 'fixed', 'titoli di stato', 'btp', 'treasury', 'governativo']):
+            fixed_income += val
+        # Priority 3: Crypto
+        elif any(k in name for k in ['crypto', 'bitcoin', 'eth', 'solana', 'btc']):
+            crypto += val
+        # Priority 4: Real Assets
+        elif any(k in name for k in ['oro', 'gold', 'commodity', 'reit', 'immobiliare', 'materie prime', 'commodities']):
             real_assets += val
+        # Priority 5: Equities (Stocks/Equity ETFs)
+        elif any(k in name for k in ['azion', 'equity', 'stock', 'share', 'etf', 'msci', 's&p']):
+            equities += val
         else:
-            equities += val # Default to equity if unsure
+            # Default fallback: check if it's more likely equity
+            equities += val
             
+    # Calcolo percentuali più dettagliate
     p_equity = (equities / total_val) * 100
     p_fixed = (fixed_income / total_val) * 100
     p_crypto = (crypto / total_val) * 100
+    p_cash = (cash / total_val) * 100
+    p_real = (real_assets / total_val) * 100
     
     # Logic for DNA Type
     if p_crypto > 25:

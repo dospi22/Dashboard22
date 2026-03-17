@@ -9,7 +9,6 @@ import importlib
 import database as db
 importlib.reload(db)
 import data_engine as de
-importlib.reload(de)
 
 # --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(
@@ -1049,18 +1048,5 @@ with tab_risk:
         st.write(f"Progresso verso l'obiettivo: **{fire_status['percentage']}%**")
         st.progress(fire_status['percentage'] / 100)
         st.caption(f"Basato su una spesa mensile di €{monthly_expenses:,.0f} e un tasso di prelievo del 4%.")
-        
-    st.divider()
-    
-    # 3. MILESTONES
-    st.subheader("🏆 Achievements & Milestones")
-    if not milestones:
-        st.info("Continua ad investire per sbloccare i tuoi primi traguardi!")
-    else:
-        # Layout a griglia per le milestones
-        m_cols = st.columns(3)
-        for i, m in enumerate(milestones):
-            with m_cols[i % 3]:
-                st.info(m)
 
 # EOF
