@@ -992,24 +992,7 @@ with tab_risk:
     # Calcolo Metriche Rischio
     risk_metrics = de.calculate_risk_metrics(history_data)
     fire_status = de.calculate_fire_status(port_data['total_current_value'], monthly_expenses)
-    milestones = de.get_milestones(port_data['total_invested'], port_data['total_current_value'])
-    portfolio_dna = de.get_portfolio_dna(port_data, asset_classes)
     
-    # 0. PORTFOLIO DNA (NEW)
-    st.subheader("🧬 Portfolio DNA")
-    dna_col1, dna_col2 = st.columns([1, 3])
-    with dna_col1:
-        st.markdown(f"<div style='font-size: 4rem; text-align: center;'>{portfolio_dna['icon']}</div>", unsafe_allow_html=True)
-    with dna_col2:
-        st.markdown(f"### **{portfolio_dna['type']}**")
-        st.write(portfolio_dna['description'])
-        
-        # Mini badge con le percentuali
-        perc_str = " | ".join([f"**{k}:** {v}%" for k, v in portfolio_dna['percentages'].items()])
-        st.caption(perc_str)
-        
-    st.divider()
-
     # 1. RISK SECTION
     st.subheader("⚠️ Risk Profile")
     r_col1, r_col2, r_col3 = st.columns(3)
