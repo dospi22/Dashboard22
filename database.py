@@ -22,6 +22,8 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
+import requests
+
 def _request(url, method="GET", data=None, extra_headers=None, custom_auth=None):
     headers = HEADERS.copy()
     if extra_headers:
@@ -29,21 +31,31 @@ def _request(url, method="GET", data=None, extra_headers=None, custom_auth=None)
     if custom_auth:
         headers["Authorization"] = f"Bearer {custom_auth}"
     
-    req_data = None
-    if data:
-        req_data = json.dumps(data).encode("utf-8")
-    
-    req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req) as response:
-            res_body = response.read().decode("utf-8")
-            return json.loads(res_body) if res_body else {}
-    except urllib.error.HTTPError as e:
-        error_msg = e.read().decode("utf-8")
-        try:
-            return {"error": True, "details": json.loads(error_msg)}
-        except:
-            return {"error": True, "details": error_msg}
+        if method == "GET":
+            response = requests.get(url, headers=headers)
+        elif method == "POST":
+            response = requests.post(url, headers=headers, json=data)
+        elif method == "PATCH":
+            response = requests.patch(url, headers=headers, json=data)
+        elif method == "DELETE":
+            response = requests.delete(url, headers=headers)
+        else:
+            return {"error": True, "details": f"Metodo {method} non supportato"}
+
+        if response.text:
+            try:
+                res_data = response.json()
+            except:
+                res_data = {"text": response.text}
+        else:
+            res_data = {}
+
+        if response.status_code >= 400:
+            return {"error": True, "details": res_data, "status_code": response.status_code}
+        
+        return res_data
+
     except Exception as e:
         return {"error": True, "details": str(e)}
 

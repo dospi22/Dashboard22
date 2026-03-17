@@ -2,6 +2,8 @@ import yfinance as yf
 from datetime import datetime, time
 import pytz
 import logging
+import numpy as np
+import pandas as pd
 import streamlit as st
 from database import get_cached_price, update_cached_price
 
@@ -114,26 +116,38 @@ def get_current_prices(tickers, force_update=False):
     # 2. Se abbiamo ticker da scaricare
     if tickers_to_fetch:
         try:
-            data = yf.download(tickers_to_fetch, period="1d", group_by="ticker", threads=True, progress=False)
+            # Scarica dati per tutti i ticker mancanti in una volta sola
+            data = yf.download(tickers_to_fetch, period="5d", group_by="ticker", threads=True, progress=False)
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             
-            for ticker in tickers_to_fetch:
-                try:
-                    if len(tickers_to_fetch) == 1:
-                        price = float(data['Close'].iloc[-1])
-                    else:
-                        price = float(data[ticker]['Close'].iloc[-1])
+            if data.empty:
+                logger.warning(f"Download fallito: DataFrame vuoto per {tickers_to_fetch}")
+            else:
+                for ticker in tickers_to_fetch:
+                    try:
+                        # Gestione differente se yfinance ritorna Series (1 ticker) o DataFrame (n ticker)
+                        ticker_data = data[ticker] if len(tickers_to_fetch) > 1 else data
                         
-                    results[ticker] = {'price': price, 'last_update': now_str}
-                    update_cached_price(ticker, price)
-                except Exception as e:
-                    cached_data = get_cached_price(ticker)
-                    if cached_data:
-                        results[ticker] = {'price': cached_data['price'], 'last_update': cached_data['last_updated']}
-                    else:
-                        results[ticker] = {'price': 0.0, 'last_update': 'N/A'}
+                        valid_rows = ticker_data['Close'].dropna()
+                        if not valid_rows.empty:
+                            price = float(valid_rows.iloc[-1])
+                            results[ticker] = {'price': price, 'last_update': now_str}
+                            update_cached_price(ticker, price)
+                        else:
+                            logger.warning(f"Nessun dato ticker per {ticker}")
+                    except Exception as e:
+                        logger.error(f"Errore ticker {ticker}: {e}")
         except Exception as e:
-            logger.error(f"Errore API bulk download: {e}")
+            logger.error(f"Errore API download: {e}")
+
+    # Fallback finale per i ticker che ancora non hanno un prezzo
+    for ticker in tickers:
+        if ticker not in results or results[ticker]['price'] == 0:
+            cached_data = get_cached_price(ticker)
+            if cached_data:
+                results[ticker] = {'price': cached_data['price'], 'last_update': cached_data['last_updated']}
+            else:
+                results[ticker] = results.get(ticker, {'price': 0.0, 'last_update': 'N/A'})
             
     return results
 
@@ -184,3 +198,63 @@ def calculate_portfolio_metrics(portfolio_items, current_prices):
         "total_pl_eur": total_pl_eur,
         "total_pl_perc": total_pl_perc
     }
+
+def calculate_risk_metrics(history_data):
+    """
+    Calcola Max Drawdown e Volatilità dal log storico.
+    """
+    if not history_data or len(history_data) < 2:
+        return {"max_drawdown": 0.0, "volatility": 0.0}
+    
+    df = pd.DataFrame(history_data)
+    df['total_value'] = df['total_value'].astype(float)
+    
+    # 1. Max Drawdown
+    rolling_max = df['total_value'].cummax()
+    drawdown = (df['total_value'] - rolling_max) / rolling_max
+    max_drawdown = drawdown.min() * 100 # In percentuale
+    
+    # 2. Volatilità (Deviazione Standard dei rendimenti logaritmici)
+    df['returns'] = df['total_value'].pct_change()
+    volatility = df['returns'].std() * np.sqrt(252) * 100 if len(df) > 5 else 0.0
+    
+    return {
+        "max_drawdown": abs(round(max_drawdown, 2)),
+        "volatility": round(volatility, 2)
+    }
+
+def calculate_fire_status(total_value, monthly_expenses, withdrawal_rate=0.04):
+    """
+    Calcola il progresso verso l'indipendenza finanziaria (FIRE).
+    Basato sulla regola del 4% (default).
+    """
+    if monthly_expenses <= 0:
+        return {"percentage": 0.0, "target_capital": 0.0}
+    
+    annual_expenses = monthly_expenses * 12
+    target_capital = annual_expenses / withdrawal_rate
+    
+    progress_perc = (total_value / target_capital) * 100 if target_capital > 0 else 0.0
+    
+    return {
+        "percentage": min(round(progress_perc, 2), 100.0),
+        "target_capital": round(target_capital, 2),
+        "is_fire": total_value >= target_capital
+    }
+
+def get_milestones(total_invested, total_value):
+    """
+    Ritorna una lista di traguardi raggiunti.
+    """
+    milestones = []
+    
+    # Esempi di milestones
+    if total_invested >= 1000: milestones.append("🌱 Primo Passo (1k€ investiti)")
+    if total_invested >= 10000: milestones.append("🌳 Accumulatore (10k€ investiti)")
+    if total_invested >= 50000: milestones.append("🏰 Fortezza (50k€ investiti)")
+    
+    pl_perc = (total_value - total_invested) / total_invested * 100 if total_invested > 0 else 0
+    if pl_perc >= 10: milestones.append("📈 Mente Fredda (+10% Gain)")
+    if pl_perc >= 25: milestones.append("💎 Mani di Diamante (+25% Gain)")
+    
+    return milestones

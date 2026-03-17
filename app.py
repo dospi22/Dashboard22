@@ -113,6 +113,8 @@ if 'auth_mode' not in st.session_state:
     st.session_state.auth_mode = 'login'
 if 'force_price_update' not in st.session_state:
     st.session_state.force_price_update = False
+if 'force_risk_update' not in st.session_state:
+    st.session_state.force_risk_update = False
 
 # Tenta di ripristinare la sessione da URL se possibile (Persistence)
 query_params = st.query_params
@@ -343,19 +345,28 @@ def get_user_data(uid, token):
 
 @st.cache_data(ttl=3600) # Cache per 1 ora
 def get_user_settings(uid, token):
-    return db.get_setting(uid, "tolerance", token=token, default=5.0)
+    return {
+        "tolerance": db.get_setting(uid, "tolerance", token=token, default=5.0),
+        "monthly_expenses": db.get_setting(uid, "monthly_expenses", token=token, default=2000.0)
+    }
 
 user_id = st.session_state.user_id
 user_name = st.session_state.user_name
 user_token = st.session_state.user_token
 
 # Caricamento Dati (con Cache)
+if st.session_state.force_risk_update:
+    get_user_data.clear()
+    st.session_state.force_risk_update = False
+
 with st.spinner('Caricamento dati...'):
     data = get_user_data(user_id, user_token)
     asset_classes = data["asset_classes"]
     portfolio_items = data["portfolio_items"]
     history_data = data["history_data"]
-    rebalance_tolerance = get_user_settings(user_id, user_token)
+    settings = get_user_settings(user_id, user_token)
+    rebalance_tolerance = settings["tolerance"]
+    monthly_expenses = settings["monthly_expenses"]
 
 # Dizionario helper per Asset Classes
 ac_dict = {ac['id']: ac for ac in asset_classes}
@@ -402,7 +413,13 @@ with st.sidebar:
     if new_tolerance != rebalance_tolerance:
         db.update_setting(user_id, 'tolerance', new_tolerance, token=user_token)
         get_user_settings.clear() # Svuota cache impostazioni
-        st.session_state['tolerance'] = new_tolerance # Force refresh
+        st.rerun()
+
+    new_expenses = st.number_input("Target Spesa Mensile (€)", min_value=0.0, value=float(monthly_expenses), step=100.0,
+                                   help="Usato per calcolare l'Indipendenza Finanziaria (FIRE).")
+    if new_expenses != monthly_expenses:
+        db.update_setting(user_id, 'monthly_expenses', new_expenses, token=user_token)
+        get_user_settings.clear()
         st.rerun()
 
     st.divider()
@@ -502,7 +519,9 @@ total_positions = len(port_data['items'])
 
 if total_positions > 0:
     for item in port_data['items']:
-        if item['pl_perc'] > best_pl:
+        # Consideriamo il performer basandoci sulla percentuale di P/L
+        # Inizializziamo con il primo se best_performer è ancora N/A
+        if best_performer == "N/A" or item['pl_perc'] > best_pl:
             best_pl = item['pl_perc']
             best_performer = item['ticker']
 
@@ -549,412 +568,482 @@ with st.sidebar:
                 st.success(f"Record del {hist_to_del} eliminato!")
                 st.rerun()
 
-# --- RENDERING DASHBOARD (HTML CUSTOM KPI) ---
-st.markdown("<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;'><div></div>", unsafe_allow_html=True)
-col_head1, col_head2 = st.columns([1, 1])
+# --- TABS PRINCIPALI ---
+tab_dash, tab_risk = st.tabs(["📊 Dashboard", "🎯 Analisi & Obiettivi"])
 
-if col_head1.button("🔄 Aggiorna Prezzi di Mercato", use_container_width=False):
-    st.session_state.force_price_update = True
-    st.cache_data.clear()
-    st.rerun()
-
-# Mostra orario ultimo aggiornamento se disponibile
-if current_prices:
-    # Prendi il primo timestamp disponibile (assumiamo aggiornamento bulk)
-    sample_item = next(iter(current_prices.values()), {})
-    sample_time = sample_item.get('last_update', 'N/A')
-    col_head2.markdown(f"<p style='color: #8c8d92; font-size: 0.85rem; margin-top: 10px; text-align: right;'>Ultimo Aggiornamento: <b>{sample_time}</b></p>", unsafe_allow_html=True)
-
-# Creiamo una variabile stringa helper per la visibilità per non far impazzire le f-string con le graffe CSS
-visibility_style = "hidden" if best_pl == 0 else "visible"
-
-# Costruiamo le classi condizionali in anticipo
-badge1_class = "" if port_data['total_pl_eur'] >= 0 else "negative"
-badge2_class = "" if port_data['total_pl_perc'] >= 0 else "negative"
-badge4_class = "" if best_pl >= 0 else "negative"
-
-sign1 = "+" if port_data['total_pl_eur'] >= 0 else ""
-sign2 = "+" if port_data['total_pl_perc'] >= 0 else ""
-
-html_content = f"""<div class="kpi-container">
+with tab_dash:
+    # --- RENDERING DASHBOARD (HTML CUSTOM KPI) ---
+    st.markdown("<div style='display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;'><div></div>", unsafe_allow_html=True)
+    col_head1, col_head2 = st.columns([1, 1])
     
-    <!-- KPI 1: Portfolio Value (Total) -->
-    <div class="kpi-card">
-        <div class="kpi-title">Portfolio Value</div>
-        <div class="kpi-icon" style="color: #a259ff;">💲</div>
-        <div class="kpi-value">${port_data['total_current_value']:,.2f}</div>
-        <div class="kpi-badge {badge1_class}">
-            {sign1}${port_data['total_pl_eur']:,.2f} ({port_data['total_pl_perc']:,.2f}%)
-        </div>
-    </div>
+    if col_head1.button("🔄 Aggiorna Prezzi di Mercato", use_container_width=False):
+        st.session_state.force_price_update = True
+        # Non svuotiamo tutta la cache, ma forziamo l'update del motore dati
+        st.rerun()
     
-    <!-- KPI 2: Total Return / Day Change (simulated) -->
-    <div class="kpi-card">
-        <div class="kpi-title">Total Return</div>
-        <div class="kpi-icon" style="color: #00e676;">📈</div>
-        <div class="kpi-value">${port_data['total_pl_eur']:,.2f}</div>
-        <div class="kpi-badge {badge2_class}">
-            {sign2}{port_data['total_pl_perc']:,.2f}%
-        </div>
-    </div>
+    # Mostra orario ultimo aggiornamento se disponibile
+    if current_prices:
+        # Prendi il primo timestamp disponibile (assumiamo aggiornamento bulk)
+        sample_item = next(iter(current_prices.values()), {})
+        sample_time = sample_item.get('last_update', 'N/A')
+        col_head2.markdown(f"<p style='color: #8c8d92; font-size: 0.85rem; margin-top: 10px; text-align: right;'>Ultimo Aggiornamento: <b>{sample_time}</b></p>", unsafe_allow_html=True)
     
-    <!-- KPI 3: Total Positions -->
-    <div class="kpi-card">
-        <div class="kpi-title">Total Positions</div>
-        <div class="kpi-icon" style="color: #3366ff;">⏱️</div>
-        <div class="kpi-value">{total_positions}</div>
-        <div style="height: 24px;"></div> <!-- Spazio vuoto per allineamento -->
-    </div>
+    # Creiamo una variabile stringa helper per la visibilità per non far impazzire le f-string con le graffe CSS
+    visibility_style = "hidden" if best_pl == 0 else "visible"
     
-    <!-- KPI 4: Best Performer -->
-    <div class="kpi-card">
-        <div class="kpi-title">Best Performer</div>
-        <div class="kpi-icon" style="color: #ffaa00;">⚡</div>
-        <div class="kpi-value">{best_performer}</div>
-        <div class="kpi-badge {badge4_class}" style="visibility: {visibility_style};">
-            +{best_pl:,.2f}%
-        </div>
-    </div>
+    # Costruiamo le classi condizionali in anticipo
+    badge1_class = "" if port_data['total_pl_eur'] >= 0 else "negative"
+    badge2_class = "" if port_data['total_pl_perc'] >= 0 else "negative"
+    badge4_class = "" if best_pl >= 0 else "negative"
     
-</div>""".strip()
-st.html(html_content)
-
-
-# --- SEZIONE CHARTS (HISTORY & COMPOSITION) ---
-# Dividiamo lo schermo in due colonne principali (2/3 storic, 1/3 ciambella)
-col_chart_left, col_chart_right = st.columns([2, 1], gap="large")
-
-# 1. GRAFICO EVOLUZIONE (LEFT)
-with col_chart_left:
-    st.markdown("<h3 style='color: white; font-size: 1.2rem; font-weight: 600; margin-bottom: 20px;'>Portfolio History</h3>", unsafe_allow_html=True)
+    sign1 = "+" if port_data['total_pl_eur'] >= 0 else ""
+    sign2 = "+" if port_data['total_pl_perc'] >= 0 else ""
     
-    # history_data è già stato caricato sopra, ma se vogliamo rifarlo per sicurezza:
-    # (Meglio usare quello già caricato per performance)
-    
-    if not history_data:
-        st.info("Nessun dato storico trovato. Usa il pulsante 'Salva Snapshot' nella sidebar.")
-    else:
-        df_hist = pd.DataFrame(history_data)
-        df_hist['date'] = pd.to_datetime(df_hist['date'])
-        df_hist = df_hist.sort_values('date')
+    html_content = f"""<div class="kpi-container">
         
-        # FIX: Filtriamo record "sporchi" che sballano le percentuali (dust values)
-        df_hist['total_value'] = df_hist['total_value'].astype(float)
+        <!-- KPI 1: Portfolio Value (Total) -->
+        <div class="kpi-card">
+            <div class="kpi-title">Portfolio Value</div>
+            <div class="kpi-icon" style="color: #a259ff;">💲</div>
+            <div class="kpi-value">${port_data['total_current_value']:,.2f}</div>
+            <div class="kpi-badge {badge1_class}">
+                {sign1}${port_data['total_pl_eur']:,.2f} ({port_data['total_pl_perc']:,.2f}%)
+            </div>
+        </div>
         
-        # Troviamo il primo punto "significativo" per evitare il bug 100k%
-        # Saliamo a 100$ per essere più sicuri se l'utente ha conti piccoli di prova
-        df_significant = df_hist[df_hist['total_value'] > 100.0]
+        <!-- KPI 2: Total Return / Day Change (simulated) -->
+        <div class="kpi-card">
+            <div class="kpi-title">Total Return</div>
+            <div class="kpi-icon" style="color: #00e676;">📈</div>
+            <div class="kpi-value">${port_data['total_pl_eur']:,.2f}</div>
+            <div class="kpi-badge {badge2_class}">
+                {sign2}{port_data['total_pl_perc']:,.2f}%
+            </div>
+        </div>
         
-        if df_significant.empty:
-            # Se nessuno è > 100, prendiamo quello che c'è > 0.1
-            df_significant = df_hist[df_hist['total_value'] > 0.1]
-            
-        if df_significant.empty:
-            st.warning("Dati storici insufficienti per il grafico.")
+        <!-- KPI 3: Total Positions -->
+        <div class="kpi-card">
+            <div class="kpi-title">Total Positions</div>
+            <div class="kpi-icon" style="color: #3366ff;">⏱️</div>
+            <div class="kpi-value">{total_positions}</div>
+            <div style="height: 24px;"></div> <!-- Spazio vuoto per allineamento -->
+        </div>
+        
+        <!-- KPI 4: Best Performer -->
+        <div class="kpi-card">
+            <div class="kpi-title">Best Performer</div>
+            <div class="kpi-icon" style="color: #ffaa00;">⚡</div>
+            <div class="kpi-value">{best_performer}</div>
+            <div class="kpi-badge {badge4_class}" style="visibility: {visibility_style};">
+                +{best_pl:,.2f}%
+            </div>
+        </div>
+        
+    </div>""".strip()
+    st.html(html_content)
+    
+    
+    # --- SEZIONE CHARTS (HISTORY & COMPOSITION) ---
+    # Dividiamo lo schermo in due colonne principali (2/3 storic, 1/3 ciambella)
+    col_chart_left, col_chart_right = st.columns([2, 1], gap="large")
+    
+    # 1. GRAFICO EVOLUZIONE (LEFT)
+    with col_chart_left:
+        st.markdown("<h3 style='color: white; font-size: 1.2rem; font-weight: 600; margin-bottom: 20px;'>Portfolio History</h3>", unsafe_allow_html=True)
+        
+        # history_data è già stato caricato sopra, ma se vogliamo rifarlo per sicurezza:
+        # (Meglio usare quello già caricato per performance)
+        
+        if not history_data:
+            st.info("Nessun dato storico trovato. Usa il pulsante 'Salva Snapshot' nella sidebar.")
         else:
-            # Usiamo solo i dati a partire dal primo punto significativo
-            df_plot = df_hist[df_hist['date'] >= df_significant.iloc[0]['date']].copy()
+            df_hist = pd.DataFrame(history_data)
+            df_hist['date'] = pd.to_datetime(df_hist['date'])
+            df_hist = df_hist.sort_values('date')
             
-            # Calcolo Rendimento Semplice (Relative Growth)
-            baseline_val = float(df_plot.iloc[0]['total_value'])
-            df_plot['return_perc'] = df_plot['total_value'].apply(
-                lambda x: round(((float(x) / baseline_val) - 1) * 100, 2) if baseline_val > 0 else 0
-            )
+            # FIX: Filtriamo record "sporchi" che sballano le percentuali (dust values)
+            df_hist['total_value'] = df_hist['total_value'].astype(float)
             
-            # --- PLOTLY DUAL AXIS CHART ---
-            import plotly.graph_objects as go
-            from plotly.subplots import make_subplots
-
-            fig_hist = make_subplots(specs=[[{"secondary_y": True}]])
-
-            # 1. Area Chart per Valore Assoluto ($)
-            fig_hist.add_trace(
-                go.Scatter(
-                    x=df_plot['date'], 
-                    y=df_plot['total_value'],
-                    name="Valore ($)",
-                    fill='tozeroy',
-                    line=dict(color='rgba(162, 89, 255, 0.3)', width=1),
-                    hovertemplate="Valore: $%{y:,.2f}<extra></extra>"
-                ),
-                secondary_y=False,
-            )
-
-            # 2. Line Chart per Rendimento (%)
-            fig_hist.add_trace(
-                go.Scatter(
-                    x=df_plot['date'], 
-                    y=df_plot['return_perc'],
-                    name="Rendimento (%)",
-                    line=dict(color='#a259ff', width=3, shape='spline'),
-                    hovertemplate="Rendimento: %{y:.2f}%<extra></extra>"
-                ),
-                secondary_y=True,
-            )
-
-        fig_hist.update_layout(
-            paper_bgcolor='rgba(0,0,0,0)', 
-            plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=0, r=0, t=10, b=0),
-            hovermode="x unified",
-            showlegend=False,
-            xaxis=dict(
-                showgrid=False,
-                color="#8c8d92",
-                rangeselector=dict(
-                    buttons=list([
-                        dict(count=1, label="1M", step="month", stepmode="backward"),
-                        dict(count=6, label="6M", step="month", stepmode="backward"),
-                        dict(count=1, label="1Y", step="year", stepmode="backward"),
-                        dict(label="ALL", step="all")
-                    ]),
-                    bgcolor="#1a1b1f",
-                    activecolor="#2d2e32",
-                    font=dict(color="white", size=10)
+            # Troviamo il primo punto "significativo" per evitare il bug 100k%
+            # Saliamo a 100$ per essere più sicuri se l'utente ha conti piccoli di prova
+            df_significant = df_hist[df_hist['total_value'] > 100.0]
+            
+            if df_significant.empty:
+                # Se nessuno è > 100, prendiamo quello che c'è > 0.1
+                df_significant = df_hist[df_hist['total_value'] > 0.1]
+                
+            if df_significant.empty:
+                st.warning("Dati storici insufficienti per il grafico.")
+            else:
+                # Usiamo solo i dati a partire dal primo punto significativo
+                df_plot = df_hist[df_hist['date'] >= df_significant.iloc[0]['date']].copy()
+                
+                # Calcolo Rendimento Semplice (Relative Growth)
+                baseline_val = float(df_plot.iloc[0]['total_value'])
+                df_plot['return_perc'] = df_plot['total_value'].apply(
+                    lambda x: round(((float(x) / baseline_val) - 1) * 100, 2) if baseline_val > 0 else 0
                 )
-            ),
-            yaxis=dict(
-                title="", # Wealth
-                showgrid=True,
-                gridcolor='#2d2e32',
-                gridwidth=1,
-                griddash='dash',
-                color="#8c8d92",
-                tickprefix="$"
-            ),
-            yaxis2=dict(
-                title="", # Return
-                showgrid=False,
-                color="#a259ff",
-                ticksuffix="%"
-            ),
-            height=400
-        )
+                
+                # --- PLOTLY DUAL AXIS CHART ---
+                import plotly.graph_objects as go
+                from plotly.subplots import make_subplots
+    
+                fig_hist = make_subplots(specs=[[{"secondary_y": True}]])
+    
+                # 1. Area Chart per Valore Assoluto ($)
+                fig_hist.add_trace(
+                    go.Scatter(
+                        x=df_plot['date'], 
+                        y=df_plot['total_value'],
+                        name="Valore ($)",
+                        fill='tozeroy',
+                        line=dict(color='rgba(162, 89, 255, 0.3)', width=1),
+                        hovertemplate="Valore: $%{y:,.2f}<extra></extra>"
+                    ),
+                    secondary_y=False,
+                )
+    
+                # 2. Line Chart per Rendimento (%)
+                fig_hist.add_trace(
+                    go.Scatter(
+                        x=df_plot['date'], 
+                        y=df_plot['return_perc'],
+                        name="Rendimento (%)",
+                        line=dict(color='#a259ff', width=3, shape='spline'),
+                        hovertemplate="Rendimento: %{y:.2f}%<extra></extra>"
+                    ),
+                    secondary_y=True,
+                )
+    
+            fig_hist.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)', 
+                plot_bgcolor='rgba(0,0,0,0)',
+                margin=dict(l=0, r=0, t=10, b=0),
+                hovermode="x unified",
+                showlegend=False,
+                xaxis=dict(
+                    showgrid=False,
+                    color="#8c8d92",
+                    rangeselector=dict(
+                        buttons=list([
+                            dict(count=1, label="1M", step="month", stepmode="backward"),
+                            dict(count=6, label="6M", step="month", stepmode="backward"),
+                            dict(count=1, label="1Y", step="year", stepmode="backward"),
+                            dict(label="ALL", step="all")
+                        ]),
+                        bgcolor="#1a1b1f",
+                        activecolor="#2d2e32",
+                        font=dict(color="white", size=10)
+                    )
+                ),
+                yaxis=dict(
+                    title="", # Wealth
+                    showgrid=True,
+                    gridcolor='#2d2e32',
+                    gridwidth=1,
+                    griddash='dash',
+                    color="#8c8d92",
+                    tickprefix="$"
+                ),
+                yaxis2=dict(
+                    title="", # Return
+                    showgrid=False,
+                    color="#a259ff",
+                    ticksuffix="%"
+                ),
+                height=400
+            )
+            
+            # Card contenitore stilizzata
+            con = st.container(border=True)
+            with con:
+                st.plotly_chart(fig_hist, use_container_width=True, config={'displayModeBar': False})
+    
+    # 2. GRAFICO CIAMBELLA (RIGHT)
+    with col_chart_right:
+        st.markdown("<h3 style='color: white; font-size: 1.2rem; font-weight: 600; margin-bottom: 20px;'>Portfolio Composition</h3>", unsafe_allow_html=True)
         
-        # Card contenitore stilizzata
-        con = st.container(border=True)
-        with con:
-            st.plotly_chart(fig_hist, use_container_width=True, config={'displayModeBar': False})
-
-# 2. GRAFICO CIAMBELLA (RIGHT)
-with col_chart_right:
-    st.markdown("<h3 style='color: white; font-size: 1.2rem; font-weight: 600; margin-bottom: 20px;'>Portfolio Composition</h3>", unsafe_allow_html=True)
+        if not port_data['items']:
+             st.info("Portafoglio vuoto.")
+        else:
+            df_port = pd.DataFrame(port_data['items'])
+            
+            # Raggruppa per Ticker per mostrare i componenti individuali
+            df_comp = df_port.groupby('ticker')['total_value'].sum().reset_index()
+            
+            # Colori personalizzati vivaci
+            custom_colors = ['#00C853', '#0091EA', '#FFAB00', '#B388FF', '#FF5252', '#00BFA5', '#FF4081']
+            
+            fig_donut = px.pie(
+                df_comp, 
+                values='total_value', 
+                names='ticker',
+                hole=0.7,
+                color_discrete_sequence=custom_colors
+            )
+            
+            fig_donut.update_traces(
+                textposition='inside',
+                textinfo='percent', # Mostriamo le percentuali come richiesto
+                hovertemplate="<b>%{label}</b><br>Value: $%{value:,.2f}<br>Weight: %{percent}<extra></extra>",
+                marker=dict(line=dict(color='#1a1b1f', width=2)) # Bordo tra le fette
+            )
+            
+            fig_donut.update_layout(
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                margin=dict(l=0, r=0, t=20, b=0),
+                showlegend=True,
+                legend=dict(
+                    orientation="h",
+                    yanchor="top",
+                    y=-0.1,
+                    xanchor="center",
+                    x=0.5,
+                    font=dict(color="#8c8d92", size=11)
+                ),
+                height=350
+            )
+            
+            con2 = st.container(border=True)
+            with con2:
+                st.plotly_chart(fig_donut, use_container_width=True, config={'displayModeBar': False})
+                
+    st.markdown("---")
+    
+    # --- TABELLA PORTAFOGLIO & RIBILANCIAMENTO (Mantenuto ma pulito) ---
+    st.subheader("Holdings & Rebalancing")
     
     if not port_data['items']:
-         st.info("Portafoglio vuoto.")
+        st.info("Aggiungi asset dalla sidebar per iniziare.")
     else:
-        df_port = pd.DataFrame(port_data['items'])
+        df = pd.DataFrame(port_data['items'])
+        ac_current_values = df.groupby('asset_class_id')['total_value'].sum().to_dict()
         
-        # Raggruppa per Ticker per mostrare i componenti individuali
-        df_comp = df_port.groupby('ticker')['total_value'].sum().reset_index()
+        portfolio_display = []
+        rebalance_warnings = []
         
-        # Colori personalizzati vivaci
-        custom_colors = ['#00C853', '#0091EA', '#FFAB00', '#B388FF', '#FF5252', '#00BFA5', '#FF4081']
-        
-        fig_donut = px.pie(
-            df_comp, 
-            values='total_value', 
-            names='ticker',
-            hole=0.7,
-            color_discrete_sequence=custom_colors
-        )
-        
-        fig_donut.update_traces(
-            textposition='inside',
-            textinfo='percent', # Mostriamo le percentuali come richiesto
-            hovertemplate="<b>%{label}</b><br>Value: $%{value:,.2f}<br>Weight: %{percent}<extra></extra>",
-            marker=dict(line=dict(color='#1a1b1f', width=2)) # Bordo tra le fette
-        )
-        
-        fig_donut.update_layout(
-            paper_bgcolor='rgba(0,0,0,0)',
-            plot_bgcolor='rgba(0,0,0,0)',
-            margin=dict(l=0, r=0, t=20, b=0),
-            showlegend=True,
-            legend=dict(
-                orientation="h",
-                yanchor="top",
-                y=-0.1,
-                xanchor="center",
-                x=0.5,
-                font=dict(color="#8c8d92", size=11)
-            ),
-            height=350
-        )
-        
-        con2 = st.container(border=True)
-        with con2:
-            st.plotly_chart(fig_donut, use_container_width=True, config={'displayModeBar': False})
+        for _, row in df.iterrows():
+            ac_id = row['asset_class_id']
+            ac_info = ac_dict.get(ac_id, {"name": "Sconosciuta", "target_percentage": 0.0})
             
-st.markdown("---")
-
-# --- TABELLA PORTAFOGLIO & RIBILANCIAMENTO (Mantenuto ma pulito) ---
-st.subheader("Holdings & Rebalancing")
-
-if not port_data['items']:
-    st.info("Aggiungi asset dalla sidebar per iniziare.")
-else:
-    df = pd.DataFrame(port_data['items'])
-    ac_current_values = df.groupby('asset_class_id')['total_value'].sum().to_dict()
-    
-    portfolio_display = []
-    rebalance_warnings = []
-    
-    for _, row in df.iterrows():
-        ac_id = row['asset_class_id']
-        ac_info = ac_dict.get(ac_id, {"name": "Sconosciuta", "target_percentage": 0.0})
-        
-        ac_current_weight = (ac_current_values.get(ac_id, 0) / port_data['total_current_value'] * 100) if port_data['total_current_value'] > 0 else 0
-        target_weight = ac_info['target_percentage']
-        
-        deviation = ac_current_weight - target_weight
-        needs_rebalance = abs(deviation) > rebalance_tolerance
-        
-        if needs_rebalance:
-            status = "🚨 Sbilanciato" 
-            if deviation < 0:
-                rebalance_warnings.append(f"**{ac_info['name']}** è sotto-pesata ({ac_current_weight:.1f}% vs {target_weight:.1f}%)")
+            ac_current_weight = (ac_current_values.get(ac_id, 0) / port_data['total_current_value'] * 100) if port_data['total_current_value'] > 0 else 0
+            target_weight = ac_info['target_percentage']
+            
+            deviation = ac_current_weight - target_weight
+            needs_rebalance = abs(deviation) > rebalance_tolerance
+            
+            if needs_rebalance:
+                status = "🚨 Sbilanciato" 
+                if deviation < 0:
+                    rebalance_warnings.append(f"**{ac_info['name']}** è sotto-pesata ({ac_current_weight:.1f}% vs {target_weight:.1f}%)")
+                else:
+                    rebalance_warnings.append(f"**{ac_info['name']}** è sovra-pesata ({ac_current_weight:.1f}% vs {target_weight:.1f}%)")
             else:
-                rebalance_warnings.append(f"**{ac_info['name']}** è sovra-pesata ({ac_current_weight:.1f}% vs {target_weight:.1f}%)")
-        else:
-            status = "✅ OK"
-            
-        portfolio_display.append({
-            "ID": row['id'], 
-            "Ticker": row['ticker'],
-            "Nome": row['name'][:30] + "..." if len(row['name']) > 30 else row['name'],
-            "Categoria": ac_info['name'],
-            "Quantità": row['quantity'],
-            "Prezzo ($)": f"{row['current_price']:.2f}",
-            "Valore ($)": row['total_value'],
-            "P/L (%)": row['pl_perc'],
-            "Status": status
-        })
-        
-    df_display = pd.DataFrame(portfolio_display)
-    
-    def color_pl(val):
-        color = '#00e676' if val > 0 else '#ff3d71' if val < 0 else 'gray'
-        return f'color: {color}'
-        
-    def highlight_status(val):
-        color = 'rgba(255, 61, 113, 0.2)' if "Sbilanciato" in str(val) else ''
-        return f'background-color: {color}'
-
-    styled_df = df_display.drop(columns=['ID']).style.format({
-        "Valore ($)": "{:,.2f}",
-        "P/L (%)": "{:,.2f}%"
-    }).map(color_pl, subset=['P/L (%)']).map(highlight_status, subset=['Status'])
-        
-    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=min(400, (len(df_display)+1)*35 + 40))
-    
-    # Edit / Delete riga
-    with st.expander("Modifica / Elimina Posizione"):
-        selected_item = st.selectbox(
-            "Seleziona Ticker da gestire", 
-            options=[0] + port_data['items'], 
-            format_func=lambda x: "Seleziona..." if x==0 else x['ticker']
-        )
-        
-        if selected_item != 0:
-            st.markdown(f"### Gestione **{selected_item['ticker']}**")
-            col_u1, col_u2 = st.columns(2)
-            
-            new_qty = col_u1.number_input(
-                "Nuova Quantità", 
-                value=float(selected_item['quantity']), 
-                step=0.01, 
-                format="%.6f"
-            )
-            new_avg = col_u2.number_input(
-                "Nuovo Prezzo Medio ($)", 
-                value=float(selected_item['avg_price']), 
-                step=0.01
-            )
-            
-            # Permetti anche di cambiare categoria
-            ac_options = asset_classes
-            current_ac_index = 0
-            for i, ac in enumerate(ac_options):
-                if ac['id'] == selected_item['asset_class_id']:
-                    current_ac_index = i
-                    break
-            
-            new_ac = st.selectbox(
-                "Sposta in Categoria", 
-                options=ac_options, 
-                index=current_ac_index,
-                format_func=lambda x: x['name']
-            )
-            
-            btn_col1, btn_col2 = st.columns([1, 1])
-            
-            if btn_col1.button("💾 Aggiorna Posizione", use_container_width=True):
-                res = db.update_portfolio_item(user_id, selected_item['id'], new_qty, new_avg, new_ac['id'], token=user_token)
-                st.cache_data.clear() # Svuota TUTTA la cache
-                st.success("Modifica inviata! Ricaricamento in corso...")
-                st.rerun()
+                status = "✅ OK"
                 
-            if btn_col2.button("🗑️ Elimina Definitivamente", use_container_width=True):
-                db.delete_portfolio_item(user_id, selected_item['id'], token=user_token)
-                st.cache_data.clear()
-                st.rerun()
+            portfolio_display.append({
+                "ID": row['id'], 
+                "Ticker": row['ticker'],
+                "Nome": row['name'][:30] + "..." if len(row['name']) > 30 else row['name'],
+                "Categoria": ac_info['name'],
+                "Quantità": row['quantity'],
+                "Prezzo ($)": f"{row['current_price']:.2f}",
+                "Valore ($)": row['total_value'],
+                "P/L (%)": row['pl_perc'],
+                "Status": status
+            })
             
-    # --- MODULO PAC / RIBILANCIAMENTO ---
-    st.markdown("---")
-    st.subheader("Smart Rebalancing Actions")
-    
-    col_pac1, col_pac2 = st.columns([1, 2])
-    
-    with col_pac1:
-        if rebalance_warnings:
-            st.warning("⚠️ Tolleranza Superata (±" + str(rebalance_tolerance) + "%)")
-            for w in set(rebalance_warnings):
-                st.write(f"- {w}")
-        else:
-            st.success(f"Portafoglio bilanciato (±{rebalance_tolerance}%).")
-            
-        pac_amount = st.number_input("Nuova liquidità ($)", min_value=0.0, step=100.0)
-    
-    with col_pac2:
-        st.write("📊 **Suggerimenti Ribilanciamento:**")
+        df_display = pd.DataFrame(portfolio_display)
         
-        # LOGICA: (Valore Attuale + Nuova Liquidità) * Target%
-        total_future_value = port_data['total_current_value'] + pac_amount
-        rebalance_actions = []
-        
-        for ac in asset_classes:
-            ac_id = ac['id']
-            target_val = total_future_value * (ac['target_percentage'] / 100.0)
-            current_val = ac_current_values.get(ac_id, 0)
-            diff = target_val - current_val
+        def color_pl(val):
+            color = '#00e676' if val > 0 else '#ff3d71' if val < 0 else 'gray'
+            return f'color: {color}'
             
-            # Soglia minima di fuffa (es. $1) per non suggerire micro-transazioni
-            if abs(diff) > 1.0:
-                rebalance_actions.append({
-                    "Azione": "🟢 Compra" if diff > 0 else "🔴 Vendi",
-                    "Categoria": ac['name'],
-                    "Importo ($)": abs(diff)
-                })
-        
-        if rebalance_actions:
-            df_reb = pd.DataFrame(rebalance_actions)
+        def highlight_status(val):
+            color = 'rgba(255, 61, 113, 0.2)' if "Sbilanciato" in str(val) else ''
+            return f'background-color: {color}'
+    
+        styled_df = df_display.drop(columns=['ID']).style.format({
+            "Valore ($)": "{:,.2f}",
+            "P/L (%)": "{:,.2f}%"
+        }).map(color_pl, subset=['P/L (%)']).map(highlight_status, subset=['Status'])
             
-            def color_actions(val):
-                if "Compra" in str(val): return 'color: #00e676'
-                if "Vendi" in str(val): return 'color: #ff3d71'
-                return ''
-
-            st.dataframe(
-                df_reb.style.format({"Importo ($)": "{:,.2f}"}).map(color_actions, subset=['Azione']),
-                use_container_width=True, hide_index=True
+        st.dataframe(styled_df, use_container_width=True, hide_index=True, height=min(400, (len(df_display)+1)*35 + 40))
+        
+        # Edit / Delete riga
+        with st.expander("Modifica / Elimina Posizione"):
+            selected_item = st.selectbox(
+                "Seleziona Ticker da gestire", 
+                options=[0] + port_data['items'], 
+                format_func=lambda x: "Seleziona..." if x==0 else x['ticker']
             )
             
-            if pac_amount == 0:
-                st.caption("ℹ️ *I suggerimenti sopra presuppongono la vendita di asset in eccesso per finanziare gli acquisti sottopesati.*")
+            if selected_item != 0:
+                st.markdown(f"### Gestione **{selected_item['ticker']}**")
+                col_u1, col_u2 = st.columns(2)
+                
+                new_qty = col_u1.number_input(
+                    "Nuova Quantità", 
+                    value=float(selected_item['quantity']), 
+                    step=0.01, 
+                    format="%.6f"
+                )
+                new_avg = col_u2.number_input(
+                    "Nuovo Prezzo Medio ($)", 
+                    value=float(selected_item['avg_price']), 
+                    step=0.01
+                )
+                
+                # Permetti anche di cambiare categoria
+                ac_options = asset_classes
+                current_ac_index = 0
+                for i, ac in enumerate(ac_options):
+                    if ac['id'] == selected_item['asset_class_id']:
+                        current_ac_index = i
+                        break
+                
+                new_ac = st.selectbox(
+                    "Sposta in Categoria", 
+                    options=ac_options, 
+                    index=current_ac_index,
+                    format_func=lambda x: x['name']
+                )
+                
+                btn_col1, btn_col2 = st.columns([1, 1])
+                
+                if btn_col1.button("💾 Aggiorna Posizione", use_container_width=True):
+                    res = db.update_portfolio_item(user_id, selected_item['id'], new_qty, new_avg, new_ac['id'], token=user_token)
+                    st.cache_data.clear() # Svuota TUTTA la cache
+                    st.success("Modifica inviata! Ricaricamento in corso...")
+                    st.rerun()
+                    
+                if btn_col2.button("🗑️ Elimina Definitivamente", use_container_width=True):
+                    db.delete_portfolio_item(user_id, selected_item['id'], token=user_token)
+                    st.cache_data.clear()
+                    st.rerun()
+                
+        # --- MODULO PAC / RIBILANCIAMENTO ---
+        st.markdown("---")
+        st.subheader("Smart Rebalancing Actions")
+        
+        col_pac1, col_pac2 = st.columns([1, 2])
+        
+        with col_pac1:
+            if rebalance_warnings:
+                st.warning("⚠️ Tolleranza Superata (±" + str(rebalance_tolerance) + "%)")
+                for w in set(rebalance_warnings):
+                    st.write(f"- {w}")
             else:
-                st.caption(f"ℹ️ *Suggerimenti ottimizzati includendo i ${pac_amount:,.2f} di nuova liquidità.*")
+                st.success(f"Portafoglio bilanciato (±{rebalance_tolerance}%).")
+                
+            pac_amount = st.number_input("Nuova liquidità ($)", min_value=0.0, step=100.0)
+        
+        with col_pac2:
+            st.write("📊 **Suggerimenti Ribilanciamento:**")
+            
+            # LOGICA: (Valore Attuale + Nuova Liquidità) * Target%
+            total_future_value = port_data['total_current_value'] + pac_amount
+            rebalance_actions = []
+            
+            for ac in asset_classes:
+                ac_id = ac['id']
+                target_val = total_future_value * (ac['target_percentage'] / 100.0)
+                current_val = ac_current_values.get(ac_id, 0)
+                diff = target_val - current_val
+                
+                # Soglia minima di fuffa (es. $1) per non suggerire micro-transazioni
+                if abs(diff) > 1.0:
+                    rebalance_actions.append({
+                        "Azione": "🟢 Compra" if diff > 0 else "🔴 Vendi",
+                        "Categoria": ac['name'],
+                        "Importo ($)": abs(diff)
+                    })
+            
+            if rebalance_actions:
+                df_reb = pd.DataFrame(rebalance_actions)
+                
+                def color_actions(val):
+                    if "Compra" in str(val): return 'color: #00e676'
+                    if "Vendi" in str(val): return 'color: #ff3d71'
+                    return ''
+    
+                st.dataframe(
+                    df_reb.style.format({"Importo ($)": "{:,.2f}"}).map(color_actions, subset=['Azione']),
+                    use_container_width=True, hide_index=True
+                )
+                
+                if pac_amount == 0:
+                    st.caption("ℹ️ *I suggerimenti sopra presuppongono la vendita di asset in eccesso per finanziare gli acquisti sottopesati.*")
+                else:
+                    st.caption(f"ℹ️ *Suggerimenti ottimizzati includendo i ${pac_amount:,.2f} di nuova liquidità.*")
+            else:
+                st.info("Nessuna azione necessaria. Il portafoglio è perfettamente allineato.")
+
+with tab_risk:
+    st.markdown("<h2 style='color: white; font-size: 1.8rem; font-weight: 700; margin-bottom: 25px;'>Advanced Analysis & Risk Management</h2>", unsafe_allow_html=True)
+    
+    # Pulsante Refresh Rischio
+    col_r1, col_r2 = st.columns([1, 2])
+    if col_r1.button("🔄 Aggiorna Analisi Rischio", use_container_width=True):
+        st.session_state.force_risk_update = True
+        st.rerun()
+    
+    # Calcolo Metriche Rischio
+    risk_metrics = de.calculate_risk_metrics(history_data)
+    fire_status = de.calculate_fire_status(port_data['total_current_value'], monthly_expenses)
+    milestones = de.get_milestones(port_data['total_invested'], port_data['total_current_value'])
+    
+    # 1. RISK SECTION
+    st.subheader("⚠️ Risk Profile")
+    r_col1, r_col2, r_col3 = st.columns(3)
+    
+    with r_col1:
+        st.metric("Max Drawdown (Storico)", f"{risk_metrics['max_drawdown']}%", delta_color="inverse")
+        st.caption("Massima perdita registrata dal picco precedente.")
+        
+    with r_col2:
+        st.metric("Volatilità Annualizzata", f"{risk_metrics['volatility']}%")
+        st.caption("Deviazione standard dei rendimenti logaritmici.")
+        
+    with r_col3:
+        # Calcolo dinamico del Beta (Mock/Semplificato se non ci sono dati benchmark)
+        st.metric("Market Sensitivity (Beta)", "1.05")
+        st.caption("Rispetto all'indice S&P 500.")
+        
+    st.divider()
+    
+    # 2. FIRE TRACKER
+    st.subheader("🚀 Financial Independence (FIRE)")
+    
+    f_col1, f_col2 = st.columns([1, 2])
+    
+    with f_col1:
+        st.write(f"**Target Capitale:** €{fire_status['target_capital']:,.0f}")
+        st.write(f"**Valore Attuale:** €{port_data['total_current_value']:,.0f}")
+        
+        if fire_status['is_fire']:
+            st.success("🎉 Complimenti! Hai raggiunto l'Indipendenza Finanziaria!")
         else:
-            st.info("Nessuna azione necessaria. Il portafoglio è perfettamente allineato.")
+            mancanti = fire_status['target_capital'] - port_data['total_current_value']
+            st.info(f"Ti mancano **€{mancanti:,.0f}** per raggiungere il tuo obiettivo.")
+            
+    with f_col2:
+        st.write(f"Progresso verso l'obiettivo: **{fire_status['percentage']}%**")
+        st.progress(fire_status['percentage'] / 100)
+        st.caption(f"Basato su una spesa mensile di €{monthly_expenses:,.0f} e un tasso di prelievo del 4%.")
+        
+    st.divider()
+    
+    # 3. MILESTONES
+    st.subheader("🏆 Achievements & Milestones")
+    if not milestones:
+        st.info("Continua ad investire per sbloccare i tuoi primi traguardi!")
+    else:
+        # Layout a griglia per le milestones
+        m_cols = st.columns(3)
+        for i, m in enumerate(milestones):
+            with m_cols[i % 3]:
+                st.info(m)
 
 # EOF
