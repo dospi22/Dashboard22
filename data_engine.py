@@ -248,13 +248,105 @@ def get_milestones(total_invested, total_value):
     """
     milestones = []
     
+    if total_invested <= 0: return milestones
+
     # Esempi di milestones
     if total_invested >= 1000: milestones.append("🌱 Primo Passo (1k€ investiti)")
     if total_invested >= 10000: milestones.append("🌳 Accumulatore (10k€ investiti)")
     if total_invested >= 50000: milestones.append("🏰 Fortezza (50k€ investiti)")
+    if total_invested >= 100000: milestones.append("👑 Re degli Investimenti (100k€ investiti)")
     
     pl_perc = (total_value - total_invested) / total_invested * 100 if total_invested > 0 else 0
     if pl_perc >= 10: milestones.append("📈 Mente Fredda (+10% Gain)")
     if pl_perc >= 25: milestones.append("💎 Mani di Diamante (+25% Gain)")
+    if pl_perc >= 50: milestones.append("🚀 Verso la Luna (+50% Gain)")
     
     return milestones
+
+def get_portfolio_dna(port_data, asset_classes):
+    """
+    Analizza la composizione e i settori per determinare la 'personalità' del portafoglio.
+    """
+    if not port_data['items']:
+        return {
+            "type": "Vuoto",
+            "description": "Inizia ad aggiungere asset per scoprire il tuo DNA finanziario.",
+            "icon": "🌑",
+            "sectors": {}
+        }
+    
+    total_val = port_data['total_current_value']
+    if total_val <= 0: return {"type": "Sconosciuto", "description": "Valore portafoglio nullo.", "icon": "❓", "sectors": {}}
+
+    # keyword classification
+    equities = 0.0
+    fixed_income = 0.0
+    cash = 0.0
+    crypto = 0.0
+    real_assets = 0.0
+    
+    ac_dict = {ac['id']: ac['name'].lower() for ac in asset_classes}
+    
+    for item in port_data['items']:
+        name = ac_dict.get(item['asset_class_id'], "")
+        val = item['total_value']
+        
+        if any(k in name for k in ['azion', 'equity', 'stock', 'share', 'etf']):
+            # Distinguiamo crypto se possibile
+            if 'crypto' in name or 'bitcoin' in name or 'eth' in name:
+                crypto += val
+            else:
+                equities += val
+        elif any(k in name for k in ['obblig', 'bond', 'fixed', 'titoli di stato']):
+            fixed_income += val
+        elif any(k in name for k in ['liquid', 'cash', 'conto', 'fondo']):
+            cash += val
+        elif any(k in name for k in ['oro', 'gold', 'commodity', 'reit', 'immobiliare']):
+            real_assets += val
+        else:
+            equities += val # Default to equity if unsure
+            
+    p_equity = (equities / total_val) * 100
+    p_fixed = (fixed_income / total_val) * 100
+    p_crypto = (crypto / total_val) * 100
+    
+    # Logic for DNA Type
+    if p_crypto > 25:
+        dna_type = "Speculativo / Web3 High"
+        description = "Il tuo portafoglio è fortemente esposto alla volatilità delle cripto. Elevato rischio, ma potenziale di crescita esplosivo."
+        icon = "💎"
+    elif p_equity > 85:
+        dna_type = "Aggressivo (Full Equity)"
+        description = "Massima esposizione azionaria. Sei orientato alla crescita a lungo termine e accetti forti oscillazioni di mercato."
+        icon = "🦁"
+    elif p_equity > 65:
+        dna_type = "Crescita (Growth)"
+        description = "Un portafoglio dinamico con una solida base azionaria, bilanciato da una piccola quota di protezione."
+        icon = "🚀"
+    elif p_equity > 40:
+        dna_type = "Bilanciato"
+        description = "Il classico equilibrio tra rischio e rendimento. Adatto a chi cerca crescita senza troppe preoccupazioni."
+        icon = "⚖️"
+    elif p_fixed > 60:
+        dna_type = "Conservativo"
+        description = "Priorità alla conservazione del capitale. Generi reddito costante con minimi drawdown."
+        icon = "🛡️"
+    elif cash > (total_val * 0.7):
+        dna_type = "Prudente / Liquido"
+        description = "Sei in modalità 'attesa'. Gran parte del tuo capitale è pronto per essere schierato quando ci saranno opportunità."
+        icon = "🧊"
+    else:
+        dna_type = "Ibrido Personalizzato"
+        description = "Hai una strategia peculiare che non rientra nei canoni standard. Un mix unico di asset."
+        icon = "🧬"
+        
+    return {
+        "type": dna_type,
+        "description": description,
+        "icon": icon,
+        "percentages": {
+            "Equity": round(p_equity, 1),
+            "Fixed Income": round(p_fixed, 1),
+            "Crypto": round(p_crypto, 1)
+        }
+    }
