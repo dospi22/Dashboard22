@@ -1,0 +1,19 @@
+name: Dashboard Keep-Alive
+
+on:
+  schedule:
+    # Esegue il ping ogni ora (minuto 0 di ogni ora)
+    - cron: '0 * * * *'
+  workflow_dispatch: # Permette l'esecuzione manuale per test
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Dashboard
+        run: |
+          if [ -z "${{ secrets.DASHBOARD_URL }}" ]; then
+            echo "ERRORE: Devi configurare il segreto DASHBOARD_URL su GitHub."
+            exit 1
+          fi
+          curl -I -s -L "${{ secrets.DASHBOARD_URL }}" | head -n 1
